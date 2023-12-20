@@ -10,13 +10,20 @@ find ~+ -type f -name '*.bam*' -exec ln -vs "{}" $OUTPUT_DIR/ ';'
 
 cd /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/ANALYSIS/WGS
 
+## Eprinomectin resistance status
+Bet - S
+Chi - S
+Luc - S
+Ara - R
+Bun - R
+Mou - R
 
-
-
-module load grenedalf/0.2.0
 
 ## within sample diversity
 ```bash
+
+module load grenedalf/0.2.0
+
 bsub.py --queue long 20 grenedlf_diversity \
 "grenedalf diversity \
 --file-prefix hcontortus_eprinomectin_wgs \
@@ -36,7 +43,30 @@ bsub.py --queue long 20 grenedlf_diversity \
 --sam-path LUC_L3.bam \
 --sam-path MOU_L3.bam"
 
+## between sample diversity
+```bash
 
+module load grenedalf/0.2.0
+
+bsub.py --queue long 20 grenedlf_fst \
+"grenedalf fst \
+--method unbiased-nei \
+--file-prefix hcontortus_eprinomectin_wgs \
+--sam-min-map-qual 30 \
+--sam-min-base-qual 30 \
+--filter-sample-min-count 2 \
+--filter-sample-min-coverage 50 \
+--filter-sample-max-coverage 5000 \
+--pool-sizes 1000 \
+--window-type sliding \
+--window-sliding-width 10000 \
+--separator-char tab \
+--sam-path ARA_L3.bam \
+--sam-path BET_L3.bam \
+--sam-path BUN_L3.bam \
+--sam-path CHI_L3.bam \
+--sam-path LUC_L3.bam \
+--sam-path MOU_L3.bam"
 
 ``
 
