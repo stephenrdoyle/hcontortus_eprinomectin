@@ -20,7 +20,7 @@ bsub.py --queue long 10 fastqc "~sd21/bash_scripts/run_fastqc"
 
 # once finished, run multiqc
 
-mulltiqc .
+multiqc .
 ```
 [Multiqc report](../04_analysis/rnaseq_multiqc_report.html) 
 
@@ -123,50 +123,132 @@ done < ${DATA_DIR}/lane_sample_IDs.list &
 ## Sleuth
 ```bash
 
-/nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/ANALYSIS/RNASEQ
+cd /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/ANALYSIS/RNASEQ
 
+```
+
+
+```R
+library(sleuth)
+library(tidyverse)
+library(patchwork)
+
+# load metadata for the RNAseq reads processed by kallisto
+metadata <- read.table("rnaseq_metadata.txt", header=T)
+
+so <- sleuth_prep(metadata, extra_bootstrap_summary = TRUE, num_cores=2)
 
 ```
 - where "rnaseq_metadata.txt" contains:
 
+| sample  | population | sex    | drug        | path                                                                                                                 |
+|---------|------------|--------|-------------|----------------------------------------------------------------------------------------------------------------------|
+| ARA_F_1 | ARA        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_F_1_out/abundance.h5 |
+| ARA_F_2 | ARA        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_F_2_out/abundance.h5 |
+| ARA_F_3 | ARA        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_F_3_out/abundance.h5 |
+| ARA_M_1 | ARA        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_M_1_out/abundance.h5 |
+| ARA_M_2 | ARA        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_M_2_out/abundance.h5 |
+| ARA_M_3 | ARA        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_M_3_out/abundance.h5 |
+| BET_F_1 | BET        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_1_out/abundance.h5 |
+| BET_F_2 | BET        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_2_out/abundance.h5 |
+| BET_F_3 | BET        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_3_out/abundance.h5 |
+| BET_M_1 | BET        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_1_out/abundance.h5 |
+| BET_M_2 | BET        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_2_out/abundance.h5 |
+| BET_M_3 | BET        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_3_out/abundance.h5 |
+| BUN_F_1 | BUN        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_F_1_out/abundance.h5 |
+| BUN_F_2 | BUN        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_F_2_out/abundance.h5 |
+| BUN_F_3 | BUN        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_F_3_out/abundance.h5 |
+| BUN_M_1 | BUN        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_M_1_out/abundance.h5 |
+| BUN_M_2 | BUN        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_M_2_out/abundance.h5 |
+| BUN_M_3 | BUN        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_M_3_out/abundance.h5 |
+| CHI_F_1 | CHI        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_F_1_out/abundance.h5 |
+| CHI_F_2 | CHI        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_F_2_out/abundance.h5 |
+| CHI_F_3 | CHI        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_F_3_out/abundance.h5 |
+| CHI_M_1 | CHI        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_M_1_out/abundance.h5 |
+| CHI_M_2 | CHI        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_M_2_out/abundance.h5 |
+| CHI_M_3 | CHI        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_M_3_out/abundance.h5 |
+| LUC_F_1 | LUC        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_F_1_out/abundance.h5 |
+| LUC_F_2 | LUC        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_F_2_out/abundance.h5 |
+| LUC_F_3 | LUC        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_F_3_out/abundance.h5 |
+| LUC_M_1 | LUC        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_M_1_out/abundance.h5 |
+| LUC_M_2 | LUC        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_M_2_out/abundance.h5 |
+| LUC_M_3 | LUC        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_M_3_out/abundance.h5 |
+| MOU_F_1 | MOU        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_F_1_out/abundance.h5 |
+| MOU_F_2 | MOU        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_F_2_out/abundance.h5 |
+| MOU_F_3 | MOU        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_F_3_out/abundance.h5 |
+| MOU_M_1 | MOU        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_M_1_out/abundance.h5 |
+| MOU_M_2 | MOU        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_M_2_out/abundance.h5 |
+| MOU_M_3 | MOU        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_M_3_out/abundance.h5 |
 
-| sample  | sex    | drug        | path                                                                                                                 |
-|---------|--------|-------------|----------------------------------------------------------------------------------------------------------------------|
-| ARA_F_1 | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_F_1_out/abundance.h5 |
-| ARA_F_2 | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_F_2_out/abundance.h5 |
-| ARA_F_3 | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_F_3_out/abundance.h5 |
-| ARA_M_1 | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_M_1_out/abundance.h5 |
-| ARA_M_2 | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_M_2_out/abundance.h5 |
-| ARA_M_3 | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_M_3_out/abundance.h5 |
-| BET_F_1 | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_1_out/abundance.h5 |
-| BET_F_2 | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_2_out/abundance.h5 |
-| BET_F_3 | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_3_out/abundance.h5 |
-| BET_M_1 | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_1_out/abundance.h5 |
-| BET_M_2 | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_2_out/abundance.h5 |
-| BET_M_3 | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_3_out/abundance.h5 |
-| BUN_F_1 | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_F_1_out/abundance.h5 |
-| BUN_F_2 | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_F_2_out/abundance.h5 |
-| BUN_F_3 | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_F_3_out/abundance.h5 |
-| BUN_M_1 | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_M_1_out/abundance.h5 |
-| BUN_M_2 | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_M_2_out/abundance.h5 |
-| BUN_M_3 | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_M_3_out/abundance.h5 |
-| CHI_F_1 | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_F_1_out/abundance.h5 |
-| CHI_F_2 | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_F_2_out/abundance.h5 |
-| CHI_F_3 | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_F_3_out/abundance.h5 |
-| CHI_M_1 | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_M_1_out/abundance.h5 |
-| CHI_M_2 | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_M_2_out/abundance.h5 |
-| CHI_M_3 | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_CHI_M_3_out/abundance.h5 |
-| LUC_F_1 | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_F_1_out/abundance.h5 |
-| LUC_F_2 | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_F_2_out/abundance.h5 |
-| LUC_F_3 | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_F_3_out/abundance.h5 |
-| LUC_M_1 | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_M_1_out/abundance.h5 |
-| LUC_M_2 | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_M_2_out/abundance.h5 |
-| LUC_M_3 | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_LUC_M_3_out/abundance.h5 |
-| MOU_F_1 | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_F_1_out/abundance.h5 |
-| MOU_F_2 | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_F_2_out/abundance.h5 |
-| MOU_F_3 | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_F_3_out/abundance.h5 |
-| MOU_M_1 | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_M_1_out/abundance.h5 |
-| MOU_M_2 | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_M_2_out/abundance.h5 |
-| MOU_M_3 | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_MOU_M_3_out/abundance.h5 |
+
+### PCAs
+- handy tutorial on PCAs for RNAseq data: https://tavareshugo.github.io/data-carpentry-rnaseq/03_rnaseq_pca.html 
+
+```R
+so <- sleuth_prep(metadata, extra_bootstrap_summary = TRUE, num_cores=2)
+
+pca_matrix <- sleuth:::spread_abundance_by(so$obs_norm, "est_counts", so$sample_to_covariates$sample)
+
+sample_pca <- prcomp(t(pca_matrix))
+
+# "sdev" contains the standard deviation explained by each PC, so if we square it we get the eigenvalues (or explained variance)
+# "rotation" contains the variable loadings for each PC, which define the eigenvectors
+# "x" contains the PC scores, i.e. the data projected on the new PC axis
+# "center" in this case contains the mean of each gene, which was subtracted from each value
+# "scale" contains the value FALSE because we did not scale the data by the standard deviation 
 
 
+pc_eigenvalues <- tibble(PC = factor(1:length(pc_eigenvalues)), 
+                         variance = pc_eigenvalues) %>% 
+  # add a new column with the percent variance
+  mutate(pct = variance/sum(variance)*100) %>% 
+  # add another column with the cumulative variance explained
+  mutate(pct_cum = cumsum(pct))
+
+# print the result
+pc_eigenvalues
+
+
+
+
+# The PC scores are stored in the "x" value of the prcomp object
+pc_scores <- sample_pca$x
+
+pc_scores <- pc_scores %>% 
+  # convert to a tibble retaining the sample names as a new column
+  as_tibble(rownames = "sample")
+
+# print the result
+pc_scores
+
+
+pc_scores <- dplyr::left_join(pc_scores, so$sample_to_covariates, by = "sample")
+
+
+plot_pca_pop <-
+    ggplot(pc_scores, aes(x = PC1, y = PC2, col=population)) +
+    geom_point() +
+    theme_bw() +
+    labs(x = paste0("PC1 variance: ",round(pc_eigenvalues$pct[1],digits=2),"%"),
+        y = paste0("PC2 variance: ",round(pc_eigenvalues$pct[2],digits=2),"%"))
+
+plot_pca_sex <-
+    ggplot(pc_scores, aes(x = PC1, y = PC2, col=sex)) +
+    geom_point() +
+    theme_bw() +
+    labs(x = paste0("PC1 variance: ",round(pc_eigenvalues$pct[1],digits=2),"%"),
+        y = paste0("PC2 variance: ",round(pc_eigenvalues$pct[2],digits=2),"%"))
+
+plot_pca_drug <-
+    ggplot(pc_scores, aes(x = PC1, y = PC2, col=drug)) +
+    geom_point() +
+    theme_bw() +
+    labs(x = paste0("PC1 variance: ",round(pc_eigenvalues$pct[1],digits=2),"%"),
+        y = paste0("PC2 variance: ",round(pc_eigenvalues$pct[2],digits=2),"%"))
+
+
+plot_pca_pop + plot_pca_sex + plot_pca_drug + plot_layout(ncol=3)
+
+ggsave("figure_rnaseq_pca_pop_sex_drug.png")
+```
+![](../04_analysis/figure_rnaseq_pca_pop_sex_drug.png)
