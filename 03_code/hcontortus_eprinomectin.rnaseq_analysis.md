@@ -120,7 +120,7 @@ done < ${DATA_DIR}/lane_sample_IDs.list &
 ```
 
 
-## Sleuth
+## Sleuth: setup and QC
 ```bash
 
 cd /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/ANALYSIS/RNASEQ
@@ -252,3 +252,93 @@ plot_pca_pop + plot_pca_sex + plot_pca_drug + plot_layout(ncol=3)
 ggsave("figure_rnaseq_pca_pop_sex_drug.png")
 ```
 ![](../04_analysis/figure_rnaseq_pca_pop_sex_drug.png)
+
+
+
+```R
+
+
+abund <- sleuth:::spread_abundance_by(so$obs_norm, "tpm", so$sample_to_covariates$sample)
+
+all_pairs <- sleuth:::apply_all_pairs(abund, sleuth:::jsd)
+
+s2c <- so$sample_to_covariates
+
+rownames(s2c) <- s2c$sample
+annotation_cols = setdiff(colnames(so$sample_to_covariates),"sample")
+s2c <- s2c[, annotation_cols, drop = FALSE]
+
+color_high = "white"
+color_low = "cornflowerblue"
+
+    colors <- colorRampPalette(c(color_high, color_low))(100)
+    
+pdf(file = "figure_rnaseq_heatmap_pop_sex_drug.pdf")
+    
+pheatmap::pheatmap(all_pairs, annotation_col = s2c,
+    color = colors, cluster_rows = TRUE, cluster_cols = TRUE,
+    clustering_distance_cols = dist(all_pairs), clustering_distance_rows = dist(all_pairs),
+    treeheight_row = 0)
+
+ dev.off()
+
+png(file = "figure_rnaseq_heatmap_pop_sex_drug.png")
+    
+pheatmap::pheatmap(all_pairs, annotation_col = s2c,
+    color = colors, cluster_rows = TRUE, cluster_cols = TRUE,
+    clustering_distance_cols = dist(all_pairs), clustering_distance_rows = dist(all_pairs),
+    treeheight_row = 0)
+
+ dev.off()
+```
+![](../04_analysis/figure_rnaseq_heatmap_pop_sex_drug.png)
+
+
+ ## Sleuth: differential expression
+
+
+```
+echo -e "target_id\tgene_id" > transcripts_genes.list
+
+grep ">" ../../RAW/REF/haemonchus_contortus.PRJEB506.WBPS18.mRNA_transcripts.fa | awk '{print}' OFS="\t" | sed -e 's/>//g' -e 's/gene=//' >> transcripts_genes.list
+
+```
+
+
+```R
+# working dir: /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/ANALYSIS/RNASEQ
+
+library(sleuth)
+library(tidyverse)
+library(patchwork)
+
+# load metadata for the RNAseq reads processed by kallisto
+metadata <- read.table("rnaseq_metadata.txt", header=T)
+
+transcripts_genes <- read.table("transcripts_genes.list", header=T)
+
+
+so <- sleuth_prep(metadata, target_mapping = transcripts_genes,
+  aggregation_column = 'gene_id', extra_bootstrap_summary = TRUE, num_cores=2)
+
+
+
+# first step: reduced model, with only sex and population (no drug) 
+so <- sleuth_fit(so, ~sex + population, 'reduced')
+
+# second step: full model , now accounting for drug 
+so <- sleuth_fit(so, ~sex + population + drug, 'full')
+
+# third step: likelihood ratio test, sleuth identifies genes whose abundances are significantly better explained when drug is taken into account, while accounting for baseline differences that may be explained by sex and population
+so <- sleuth_lrt(so, 'reduced', 'full')
+
+sleuth_table_gene <- sleuth_results(so, 'reduced:full', 'lrt', show_all = FALSE)
+
+sleuth_table_gene <- dplyr::filter(sleuth_table_gene, qval <= 0.05)
+```
+
+
+so <- sleuth_fit(so, ~sex, 'reduced')
+
+# second step: full model , now accounting for drug 
+so <- sleuth_fit(so, ~sex + drug, 'full')
