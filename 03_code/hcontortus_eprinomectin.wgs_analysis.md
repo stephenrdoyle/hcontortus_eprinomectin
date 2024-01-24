@@ -12,6 +12,9 @@
 - note that originally, there was meant to be three resistant and three susceptible farms
      - after sequencing and some analysis, we found that Bet looked more resistant. This was confirmed by some new phenotyping performed between sending the samples for sequencing and analysis. Hence, 4 resistant and 2 susceptible.
 
+- the main aim to compare the genetic diversity of susceptible and resistant strains to identify regions of the genome associated with eprinomectin resistance
+
+
 
 
 ## Reference genome
@@ -43,8 +46,12 @@ wget https://ftp.ebi.ac.uk/pub/databases/wormbase/parasite/releases/WBPS18/speci
 | MOU_L3 | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#6_1.fastq.gz | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#6_2.fastq.gz |
 
 
+
+
 ```bash
+# mapping directory
 cd /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_WGS
+
 
 # run mapping pipeline
 bsub.py 10 mapping_wgs "mapping-helminth --reference HAEM_V4_final.chr.fa --input eprinomectin_wgs.mapping.manifest --outdir mapping_eprinomectin_wgs"
@@ -61,7 +68,8 @@ multiqc .
 
 
 
-## Collect mapped data for analysis
+## Analyses
+### Collect mapped data for analysis
 ```bash
 # go to mapping directory
 cd /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_WGS/mapping_eprinomectin_wgs
@@ -73,12 +81,12 @@ find ~+ -type f -name '*.bam*' -exec ln -vs "{}" $OUTPUT_DIR/ ';'
 
 
 
-## within sample diversity
+## Within sample diversity
 ```bash
 cd /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/ANALYSIS/WGS
 
 
-module load grenedalf/0.2.0
+module load grenedalf/0.3.0
 
 bsub.py --queue long 20 grenedlf_diversity \
 "grenedalf diversity \
@@ -86,8 +94,8 @@ bsub.py --queue long 20 grenedlf_diversity \
 --sam-min-map-qual 30 \
 --sam-min-base-qual 30 \
 --filter-sample-min-count 2 \
---filter-sample-min-coverage 50 \
---filter-sample-max-coverage 5000 \
+--filter-sample-min-coverage 30 \
+--filter-sample-max-coverage 300 \
 --pool-sizes 1000 \
 --window-type sliding \
 --window-sliding-width 10000 \
@@ -99,6 +107,8 @@ bsub.py --queue long 20 grenedlf_diversity \
 --sam-path LUC_L3.bam \
 --sam-path MOU_L3.bam"
 
+
+# removed the "_L3:1" from the output data
 sed -i 's/_L3:1//g' hcontortus_eprinomectin_wgsdiversity.csv
 ```
 
@@ -167,25 +177,33 @@ ggplot(data_tajimas_d, aes(start+5000/1e6, data,colour = chrom)) +
 
 
 
-
 ## between sample diversity
+- pairwise comparisons between all samples
+- from this, will select specific pairwise comparisons to highlight
+     - susceptible vs resistant
+     - susceptible vs susceptible
+     - resistant vs resistant
+
+
 ```bash
+cd /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/ANALYSIS/WGS
 
 module load grenedalf/0.2.0
 
 bsub.py --queue long 20 grenedlf_fst \
 "grenedalf fst \
 --method unbiased-nei \
---file-prefix hcontortus_eprinomectin_wgs \
+--file-prefix hcontortus_eprinomectin_wgs_grenedalf0.3.0fst \
 --sam-min-map-qual 30 \
 --sam-min-base-qual 30 \
 --filter-sample-min-count 2 \
---filter-sample-min-coverage 50 \
---filter-sample-max-coverage 5000 \
+--filter-sample-min-coverage 30 \
+--filter-sample-max-coverage 300 \
 --pool-sizes 1000 \
 --window-type sliding \
 --window-sliding-width 10000 \
 --separator-char tab \
+--write-pi-tables \
 --sam-path ARA_L3.bam \
 --sam-path BET_L3.bam \
 --sam-path BUN_L3.bam \
@@ -193,9 +211,14 @@ bsub.py --queue long 20 grenedlf_fst \
 --sam-path LUC_L3.bam \
 --sam-path MOU_L3.bam"
 
-sed -i 's/_L3:1//g' hcontortus_eprinomectin_wgsfst.csv
-``
+sed -i 's/_L3:1//g' hcontortus_eprinomectin_wgs_grenedalf0.3.0fst.csv
+```
 
+
+
+- the header contains the following sample headings reprensenting the pairwise combinations
+     - ARA.BET	ARA.BUN	ARA.CHI	ARA.LUC	ARA.MOU	BET.BUN	BET.CHI	BET.LUC	BET.MOU	BUN.CHI	BUN.LUC	BUN.MOU	CHI.LUC	CHI.MOU	LUC.MOU
+- need to select the appropriate samples to compare
     - Chi - S
     - Luc - S
     - Ara - R
@@ -204,17 +227,20 @@ sed -i 's/_L3:1//g' hcontortus_eprinomectin_wgsfst.csv
     - Mou - R
 
 
-ARA.BET	ARA.BUN	ARA.CHI	ARA.LUC	ARA.MOU	BET.BUN	BET.CHI	BET.LUC	BET.MOU	BUN.CHI	BUN.LUC	BUN.MOU	CHI.LUC	CHI.MOU	LUC.MOU
-
 ```R
+# libraries
 library(tidyverse)
-rawdata <- read.table("hcontortus_eprinomectin_wgsfst.csv",  header=T)
+
+# get data and reformat
+rawdata <- read.table("hcontortus_eprinomectin_wgs_grenedalf0.3.0fst.csv",  header=T)
 
 data <- rawdata %>% pivot_longer(!chrom:snps, values_to="fst")
 
+# select only susceptible vs resistant comparisons
 data_sus_v_res <- data %>% filter(str_detect(name, 'ARA.CHI|BET.CHI|BUN.CHI|CHI.MOU|ARA.LUC|BUN.LUC|LUC.MOU|BET.LUC'))
 
 
+# all chromosomes
 ggplot(data_sus_v_res) +
      geom_point(aes( start/1e6, fst, colour = chrom),  size = 0.1) +
      facet_grid(name ~ chrom , space="free_x", scales="free_x", switch="x") +
@@ -222,6 +248,8 @@ ggplot(data_sus_v_res) +
      labs(x="Genomic position (Mb)", y = "Genetic differentiation (Fst)") +
      ylim(0,1)
 
+ggsave("figure_genomewide_fst_suseptible-v-resistant.pdf", height=10, width=7, units="in")
+ggsave("figure_genomewide_fst_suseptible-v-resistant.png")
 
 # zoom on chromosome 1
 data_sus_v_res_chr1 <- data_sus_v_res %>% filter(str_detect(chrom, 'hcontortus_chr1_Celeg_TT_arrow_pilon'))
@@ -268,8 +296,12 @@ ggplot(data_sus_v_res_chr5 ) +
      labs(x="Genomic position (Mb)", y = "Genetic differentiation (Fst)") +
      geom_vline(xintercept=37.5) + xlim(35,40)
 
+```
+![](../04_analysis/figure_genomewide_fst_suseptible-v-resistant.png)
 
 
+
+```R 
 
 
 
@@ -287,6 +319,9 @@ ggplot(data_res_v_res) +
      labs(x="Genomic position (Mb)", y = "Genetic differentiation (Fst)") +
      ylim(0,1)
 
+ggsave("figure_genomewide_fst_resistant-v-resistant.pdf", height=10, width=7, units="in")
+ggsave("figure_genomewide_fst_resistant-v-resistant.png")
+
 
 ggplot(data_res_v_res_chr5 ) +
      geom_point(aes( start/1e6, fst, colour = chrom),  size = 0.1) +
@@ -295,9 +330,13 @@ ggplot(data_res_v_res_chr5 ) +
      labs(x="Genomic position (Mb)", y = "Genetic differentiation (Fst)") +
      geom_vline(xintercept=37.5) + xlim(35,40)
 
+```
+![](../04_analysis/figure_genomewide_fst_resistant-v-resistant.png)
 
 
 
+
+```R
 # susceptible vs susceptible
 
 data_sus_v_sus <- data %>% filter(str_detect(name, 'CHI.LUC'))
@@ -312,6 +351,9 @@ ggplot(data_sus_v_sus) +
      labs(x="Genomic position (Mb)", y = "Genetic differentiation (Fst)") +
      ylim(0,1)
 
+ggsave("figure_genomewide_fst_susceptible-v-susceptible.pdf", height=3, width=7, units="in")
+ggsave("figure_genomewide_fst_susceptible-v-susceptible.png")
+
 
 ggplot(data_sus_v_sus_chr5) +
      geom_point(aes( start/1e6, fst, colour = chrom),  size = 0.1) +
@@ -322,3 +364,4 @@ ggplot(data_sus_v_sus_chr5) +
 
 
 ```
+![](../04_analysis/figure_genomewide_fst_susceptible-v-susceptible.png)
