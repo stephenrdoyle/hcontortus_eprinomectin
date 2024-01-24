@@ -149,12 +149,12 @@ so <- sleuth_prep(metadata, extra_bootstrap_summary = TRUE, num_cores=2)
 | ARA_M_1 | ARA        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_M_1_out/abundance.h5 |
 | ARA_M_2 | ARA        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_M_2_out/abundance.h5 |
 | ARA_M_3 | ARA        | male   | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_ARA_M_3_out/abundance.h5 |
-| BET_F_1 | BET        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_1_out/abundance.h5 |
-| BET_F_2 | BET        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_2_out/abundance.h5 |
-| BET_F_3 | BET        | female | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_3_out/abundance.h5 |
-| BET_M_1 | BET        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_1_out/abundance.h5 |
-| BET_M_2 | BET        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_2_out/abundance.h5 |
-| BET_M_3 | BET        | male   | susceptible | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_3_out/abundance.h5 |
+| BET_F_1 | BET        | female | resistant | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_1_out/abundance.h5 |
+| BET_F_2 | BET        | female | resistant | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_2_out/abundance.h5 |
+| BET_F_3 | BET        | female | resistant | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_F_3_out/abundance.h5 |
+| BET_M_1 | BET        | male   | resistant | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_1_out/abundance.h5 |
+| BET_M_2 | BET        | male   | resistant | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_2_out/abundance.h5 |
+| BET_M_3 | BET        | male   | resistant | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BET_M_3_out/abundance.h5 |
 | BUN_F_1 | BUN        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_F_1_out/abundance.h5 |
 | BUN_F_2 | BUN        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_F_2_out/abundance.h5 |
 | BUN_F_3 | BUN        | female | resistant   | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_RNASEQ/kallisto_BUN_F_3_out/abundance.h5 |
@@ -197,6 +197,7 @@ sample_pca <- prcomp(t(pca_matrix))
 # "center" in this case contains the mean of each gene, which was subtracted from each value
 # "scale" contains the value FALSE because we did not scale the data by the standard deviation 
 
+pc_eigenvalues <- sample_pca$sdev^2
 
 pc_eigenvalues <- tibble(PC = factor(1:length(pc_eigenvalues)), 
                          variance = pc_eigenvalues) %>% 
@@ -297,7 +298,7 @@ pheatmap::pheatmap(all_pairs, annotation_col = s2c,
  ## Sleuth: differential expression
 
 
-```
+```bash
 echo -e "target_id\tgene_id" > transcripts_genes.list
 
 grep ">" ../../RAW/REF/haemonchus_contortus.PRJEB506.WBPS18.mRNA_transcripts.fa | awk '{print}' OFS="\t" | sed -e 's/>//g' -e 's/gene=//' >> transcripts_genes.list
@@ -315,30 +316,223 @@ library(patchwork)
 # load metadata for the RNAseq reads processed by kallisto
 metadata <- read.table("rnaseq_metadata.txt", header=T)
 
+male_metadata <- metadata %>% filter(sex=="male")
+female_metadata <- metadata %>% filter(sex=="female")
+
 transcripts_genes <- read.table("transcripts_genes.list", header=T)
 
 
 so <- sleuth_prep(metadata, target_mapping = transcripts_genes,
-  aggregation_column = 'gene_id', extra_bootstrap_summary = TRUE, num_cores=2)
+  aggregation_column = 'gene_id', extra_bootstrap_summary = TRUE, num_cores=2, read_bootstrap_tpm = TRUE)
 
+so_male <- sleuth_prep(male_metadata, target_mapping = transcripts_genes,
+  aggregation_column = 'gene_id', extra_bootstrap_summary = TRUE, num_cores=2, read_bootstrap_tpm = TRUE)
 
+so_female <- sleuth_prep(female_metadata, target_mapping = transcripts_genes,
+  aggregation_column = 'gene_id', extra_bootstrap_summary = TRUE, num_cores=2, read_bootstrap_tpm = TRUE)
 
-# first step: reduced model, with only sex and population (no drug) 
-so <- sleuth_fit(so, ~sex + population, 'reduced')
+# first step: reduced model, with only sex (no drug) 
+#--- note, tried to add population as well, but didnt work as there is nested groups - I think this is the problem at least
+#--- error : "system is computationally singular: reciprocal condition number = 2.17691e-18"
+so <- sleuth_fit(obj=so, ~sex, 'reduced')
 
 # second step: full model , now accounting for drug 
-so <- sleuth_fit(so, ~sex + population + drug, 'full')
+so <- sleuth_fit(obj=so, ~sex + drug, 'full')
 
-# third step: likelihood ratio test, sleuth identifies genes whose abundances are significantly better explained when drug is taken into account, while accounting for baseline differences that may be explained by sex and population
-so <- sleuth_lrt(so, 'reduced', 'full')
+# third step: likelihood ratio test, sleuth identifies genes whose abundances are significantly better explained when drug is taken into account, while accounting for baseline differences that may be explained by sex
+so <- sleuth_lrt(obj=so, null_model='reduced', alt_model='full')
+
 
 sleuth_table_gene <- sleuth_results(so, 'reduced:full', 'lrt', show_all = FALSE)
 
 sleuth_table_gene <- dplyr::filter(sleuth_table_gene, qval <= 0.05)
+#> 1158 genes
+
+
+models(so)
+
+# [  reduced  ]
+# formula:  ~sex
+# data modeled:  obs_counts
+# transform sync'ed:  TRUE
+# coefficients:
+# 	(Intercept)
+#  	sexmale
+# [  full  ]
+# formula:  ~sex + drug
+# data modeled:  obs_counts
+# transform sync'ed:  TRUE
+# coefficients:
+# 	(Intercept)
+#  	sexmale
+#  	drugsusceptible
+
+so <- sleuth_wt(so, 'sexmale')
+so <- sleuth_wt(so, 'drugsusceptible')
+
+results_table <- sleuth_results(so, 'sexmale', 'wt', show_all=FALSE)
+results_table <- dplyr::filter(results_table, qval <= 0.05)
+
+results_table <- sleuth_results(so, 'drugsusceptible', 'wt', show_all=FALSE)
+results_table <- dplyr::filter(results_table, qval <= 0.05)
+#> 1074 genes
 ```
 
 
-so <- sleuth_fit(so, ~sex, 'reduced')
 
-# second step: full model , now accounting for drug 
-so <- sleuth_fit(so, ~sex + drug, 'full')
+
+
+
+
+
+```R
+# run male model
+so_male <- sleuth_fit(so_male, ~1, 'reduced')
+
+so_male <- sleuth_fit(so_male, ~drug, 'full')
+
+# compare reduced and full models using lrt
+so_male <- sleuth_lrt(obj=so_male, null_model='reduced', alt_model='full')
+
+
+sleuth_table_gene_male_all <- sleuth_results(obj=so_male, test='reduced:full', test_type='lrt', show_all = FALSE, pval_aggregate=FALSE)
+sleuth_table_gene_male_q0.05 <- dplyr::filter(sleuth_table_gene_male_all, qval <= 0.05)
+#> 858 genes
+
+so_male <- sleuth_wt(so_male, 'drugsusceptible', which_model = 'full')
+sleuth_so_male_wt_results <- sleuth_results(so_male, 'drugsusceptible', "wt", pval_aggregate=FALSE, show_all=TRUE, rename_cols=TRUE)
+sleuth_so_male_wt_results_q0.05 <- dplyr::filter(sleuth_so_male_wt_results, qval <= 0.05)
+#> 1193
+
+
+
+
+
+
+so_female <- sleuth_fit(so_female, ~1, 'reduced')
+so_female <- sleuth_fit(so_female, ~drug, 'full')
+
+so_female <- sleuth_lrt(so_female, null_model='reduced', alt_model='full')
+
+sleuth_table_gene_female_all <- sleuth_results(so_female, 'reduced:full', 'lrt', show_all = TRUE)
+
+sleuth_table_gene_female_q0.05 <- dplyr::filter(sleuth_table_gene_female_all, qval <= 0.05)
+#> 691 genes
+
+so_female <- sleuth_wt(so_female, 'drugsusceptible', which_model = 'full')
+sleuth_so_female_wt_results <- sleuth_results(so_female, 'drugsusceptible', "wt", pval_aggregate=FALSE, show_all=TRUE, rename_cols=TRUE)
+sleuth_so_female_wt_results_q0.05 <- dplyr::filter(sleuth_so_female_wt_results, qval <= 0.05)
+
+#> 922 genes
+
+
+
+
+
+sleuth_prep(........, transformation_function = function(x) log2(x + 0.5))
+
+# male vs female 
+
+merge_results <- inner_join(sleuth_so_female_wt_results, sleuth_so_male_wt_results, by="target_id")
+
+cols <- c("both-sexes" = "red", "female-specific" = "blue", "male-specific" = "darkgreen", "non-significant" = "grey")
+
+set_qval=0.05
+
+merge_results <- merge_results %>% 
+    mutate(Color = ifelse(qval.x < set_qval & qval.y > set_qval, 'female-specific', ifelse(qval.x > set_qval & qval.y < set_qval, 'male-specific', ifelse((qval.x < set_qval & qval.y < set_qval), 'both-sexes', 'non-significant'))))
+
+
+plot_male_female <- 
+        ggplot(merge_results, aes(b.x, b.y)) + 
+        geom_point(aes(color=as.factor(Color)), size=0.5, alpha=0.5) + 
+        theme_bw() +
+        scale_colour_manual("Significant?", values=cols) +
+        #geom_text_repel(data=subset(merge_results, Color=="both-sexes"), aes(label=gene_id),box.padding = 0.5, max.overlaps = Inf) +
+        labs(x="Female: resistant v susceptible (beta)", y="Male: resistant v susceptible (beta)") +
+        xlim(-4,4) + ylim(-4,4) +
+        annotate(geom = "text", x=-3, y=3.5, label="Female: up(R)/down(S)\n Male: up(S)/down(R)", size=3) +
+        annotate(geom = "text", x=-3, y=-3.5, label="Female: up(R)/down(S)\n Male: up(R))/down(S)", size=3) +
+        annotate(geom = "text", x=3, y=3.5, label="Female: up(S)/down(R)\n Male: up(R))/down(S)", size=3) +
+        annotate(geom = "text", x=3, y=-3.5, label="Female: up(S)/down(R)\n Male: up(S))/down(R)", size=3) 
+
+
+plot_female_volcano <- 
+    sleuth_so_female_wt_results %>% 
+    mutate(Color = ifelse(qval < set_qval, 'blue', 'grey')) %>% 
+    ggplot() + 
+    geom_point(aes(b, -log10(qval), col=Color), size=0.5, alpha=0.5) + 
+    scale_color_identity() +
+    theme_bw() +
+    labs(x="Female: resistant v susceptible (beta)", y="-log10(qval)")+
+    xlim(-4,4) +
+    annotate(geom = "text", x=-3,y=10.5, label="up(R)\ndown(S)", size=3)  +
+    annotate(geom = "text", x=3,y=10.5, label="up(S)\ndown(R)", size=3) 
+
+merge_results %>% filter(qval.x<0.05 & b.x >0 )
+#> 398 upregulated in susceptible
+merge_results %>% filter(qval.x<0.05 & b.x <0 )
+#> 524 upregulated in resistant
+
+plot_male_volcano <-
+    sleuth_so_male_wt_results %>% 
+    mutate(Color = ifelse(qval < set_qval, 'blue', 'grey')) %>% 
+    ggplot() + 
+    geom_point(aes(b, -log10(qval), col=Color), size=0.5, alpha=0.5) + 
+    scale_color_identity() +
+    theme_bw() +
+    labs(x="Male: resistant v susceptible (beta)", y="-log10(qval)")+
+    xlim(-4,4) +
+    annotate(geom = "text", x=-3,y=15, label="up(R)\ndown(S)", size=3)  +
+    annotate(geom = "text", x=3,y=15, label="up(S)\ndown(R)", size=3) 
+
+merge_results %>% filter(qval.y<set_qval & b.y >0 )
+#> 858 upregulated in susceptible
+merge_results %>% filter(qval.y<set_qval & b.y <0 )
+#> 335 upregulated in resistant
+
+merge_results %>% filter(qval.x<set_qval & b.x >0 & qval.y<set_qval & b.y >0)
+#> 51 genes up in male and female susceptible, down in resistant
+
+merge_results %>% filter(qval.x<set_qval & b.x <0 & qval.y<set_qval & b.y <0)
+#> 60 genes up in male and female resistant, down in susceptible
+
+merge_results %>% filter(qval.x<set_qval & b.x <0 & qval.y<set_qval & b.y >0)
+#> 7 genes up in resistant female, down in resistant males
+
+merge_results %>% filter(qval.x<set_qval & b.x >0 & qval.y<set_qval & b.y <0)
+#> 2 genes up in resistant males, down in resistant females
+
+
+
+
+
+(plot_female_volcano + plot_male_volcano) / plot_male_female + plot_layout(height=c(1,2))
+
+ggsave("figure_rnaseq_differential_expression_male_v_female_v_male-female.pdf", height=7, width=7, units="in")
+ggsave("figure_rnaseq_differential_expression_male_v_female_v_male-female.png")
+```
+![](../04_analysis/figure_rnaseq_heatmap_pop_sex_drug.png)
+
+
+# sleuth_so_female_wt_results %>% 
+#     mutate(Color = ifelse(qval < 0.05, 'blue', 'grey')) + 
+#     ggplot(aes(b,-log10(qval),col=Colour)) + geom_point() + scale_color_identity()
+
+# sleuth_so_female_wt_results %>% 
+#     mutate(Color = ifelse(qval < 0.05, 'blue', 'grey')) %>% 
+#  ggplot() + geom_point(aes(b,-log10(qval),col=Color)) + scale_color_identity()
+
+
+
+
+
+ln -s ../../RAW/REF/haemonchus_contortus.PRJEB506.WBPS18.annotations.gff3
+
+cat haemonchus_contortus.PRJEB506.WBPS18.annotations.gff3 | awk -F'[\t;]' '{if($3=="mRNA") print $1,$4,$5,$9}' OFS="\t" | sed 's/ID=transcript://g' > transcript_coords.txt
+
+transcript_coords <- read.table("transcript_coords.txt")
+colnames(transcript_coords) <- c("chrom", "start", "end", "target_id")
+
+female_wt_results_coords <- left_join(sleuth_so_female_wt_results, transcript_coords, by="target_id")
+male_wt_results_coords <- left_join(sleuth_so_male_wt_results, transcript_coords, by="target_id")
