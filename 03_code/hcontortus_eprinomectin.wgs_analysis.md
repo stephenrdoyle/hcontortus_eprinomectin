@@ -3,13 +3,62 @@
 ### author: Stephen Doyle
 
 - pool-seq whole genome analysis of pools of parasites from two eprinomectin-susceptible and four resistant farms
+    - Chi - Susceptible
+    - Luc - Susceptible
+    - Ara - Resistant
+    - Bet - Resistant
+    - Bun - Resistant
+    - Mou - Resistant
+- note that originally, there was meant to be three resistant and three susceptible farms
+     - after sequencing and some analysis, we found that Bet looked more resistant. This was confirmed by some new phenotyping performed between sending the samples for sequencing and analysis. Hence, 4 resistant and 2 susceptible.
 
-    - Chi - S
-    - Luc - S
-    - Ara - R
-    - Bet - R
-    - Bun - R
-    - Mou - R
+
+
+## Reference genome
+- using the H. contortus reference genome hosted on WormBase Parasite 
+     - (https://parasite.wormbase.org/Haemonchus_contortus_prjeb506/Info/Index/)
+     - genome paper: https://doi.org/10.1038/s42003-020-01377-3 
+
+- I used a local version already on my HPC, but the same genome can be downloaded as follows
+
+```bash
+cd /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/REF
+
+wget https://ftp.ebi.ac.uk/pub/databases/wormbase/parasite/releases/WBPS18/species/haemonchus_contortus/PRJEB506/haemonchus_contortus.PRJEB506.WBPS18.genomic.fa.gz
+```
+
+
+## Mapping
+- mapping was performed using our in-house nextflow pipeline 
+- requires a sample manifest, here called "eprinomectin_wgs.mapping.manifest", which is used in the mapping pipline. 
+- It contains the following information, and links the sample name to the sequnecing data
+
+| ID     | R1                                                                                           | R2                                                                                           |
+|--------|----------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| CHI_L3 | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#1_1.fastq.gz | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#1_2.fastq.gz |
+| BET_L3 | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#2_1.fastq.gz | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#2_2.fastq.gz |
+| LUC_L3 | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#3_1.fastq.gz | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#3_2.fastq.gz |
+| ARA_L3 | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#4_1.fastq.gz | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#4_2.fastq.gz |
+| BUN_L3 | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#5_1.fastq.gz | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#5_2.fastq.gz |
+| MOU_L3 | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#6_1.fastq.gz | /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/RAW/48115_2#6_2.fastq.gz |
+
+
+```bash
+cd /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/MAPPING_WGS
+
+# run mapping pipeline
+bsub.py 10 mapping_wgs "mapping-helminth --reference HAEM_V4_final.chr.fa --input eprinomectin_wgs.mapping.manifest --outdir mapping_eprinomectin_wgs"
+
+
+# collect and check mapping stats using multiqc
+multiqc .
+
+```
+[Multiqc report](../04_analysis/wgs_multiqc_report.html) 
+
+
+
+
 
 
 ## Collect mapped data for analysis
