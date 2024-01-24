@@ -1,13 +1,21 @@
+# hcontortus eprinomectin analysis: maps of sampling sites
+
+### author: Stephen Doyle
+
+- want to generate some maps to show the sampling sites, and importantly get a sense of the relative distance between sites
+- I think this would be useful for understanding shared variation between sampling sites and whether resistance is evolving independently or spreading
 
 
 
 
-https://www.data.gouv.fr/fr/datasets/contours-des-departements-francais-issus-d-openstreetmap/#/community-resources
-"Map of French departments (simplified Rhône dept.)"
+## Map of France
+- found some shape files that might be useful of regions of France 
+    - https://www.data.gouv.fr/fr/datasets/contours-des-departements-francais-issus-d-openstreetmap/#/community-resources   
+    - "Map of French departments (simplified Rhône dept.)"
+    - has some coditions of use, which might be important for publishing
+        - This data comes from crowdsourcing carried out by contributors to the OpenStreetMap project and is under ODbL license which requires identical sharing and the obligatory attribution statement must be " © OpenStreetMap contributors under ODbL license " in accordance with http: //osm.org/copyright
 
-This data comes from crowdsourcing carried out by contributors to the OpenStreetMap project and is under ODbL license which requires identical sharing and the obligatory attribution statement must be " © OpenStreetMap contributors under ODbL license " in accordance with http: //osm.org/copyrigh
-
-
+```R
 library(ggplot2)
 library(dplyr)
 library(rgdal)
@@ -27,12 +35,14 @@ ggplot() +
 
 ggsave("france_sample_map.pdf")
 
-wget https://www.naturalearthdata.com/http//www.naturalearthdata.com/download/10m/raster/HYP_HR_SR.zip
-unzip HYP_HR_SR.zip
+```
 
 
-https://eriqande.github.io/rep-res-eeb-2017/plotting-spatial-data-with-ggplot.html
+## Zoomed in view of the sampling sites
+- want a zoomed in view, which will better show distance between sites, and perhaps some landscape information
+- tried a few different things, before getting some help from Shannon S using OpenStreetMap and "mapview" package
 
+```R
 library(ggplot2)
 library(dplyr)
 library("raster")
@@ -40,10 +50,6 @@ library(sp)
 library(ggspatial)
 library(rgdal)
 library(ggrepel)
-
-
-
-
 
 
 library(mapview)
@@ -67,3 +73,5 @@ map <- mapview(data_shapefile,
                             col.regions=list("red", "blue"))
 #view map 
 mapshot(map, file="france_sample_map_zoom.pdf", remove_controls = c("zoomControl", "layersControl", "homeButton","drawToolbar", "easyButton"))
+
+```
