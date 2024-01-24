@@ -14,6 +14,30 @@
     - "Map of French departments (simplified Rhône dept.)"
     - has some coditions of use, which might be important for publishing
         - This data comes from crowdsourcing carried out by contributors to the OpenStreetMap project and is under ODbL license which requires identical sharing and the obligatory attribution statement must be " © OpenStreetMap contributors under ODbL license " in accordance with http: //osm.org/copyright
+    - downloaded a file called "map_fr_dept_remaked.shx.shp", which gets used below
+
+
+- needed to estimate the coordinates of the sampling sites
+    - actual sampling coordinates are likely sensitive information given we are dealing with resistance, and so need to be estimated
+    - Anne L posted a map, and so roughly identified the positions in Google Maps, and made note of the GPS coords
+    - made a table of the following, called "map_data.txt", which gets used in the code below
+
+| location      | eprinomectin_response | latitude  | longitude |
+|---------------|-----------------------|-----------|-----------|
+| Mouguex (MOU) | Resistant             | 43.175615 | -0.505705 |
+| Arason (ARA)  | Resistant             | 43.131032 | -0.288039 |
+| Chirou (CHI)  | Susceptible           | 43.227044 | -0.829458 |
+| Bunauz (BUN)  | Resistant             | 43.204526 | -1.072531 |
+| Lucide (LUC)  | Susceptible           | 43.298048 | -1.074591 |
+| Betanco (BET) | Resistant             | 43.425588 | -1.245152 |
+
+
+
+```bash
+# working dir
+cd /nfs/users/nfs_s/sd21/lustre_link/haemonchus_contortus/EPRINOMECTIN/ANALYSIS/MAP
+```
+
 
 ```R
 library(ggplot2)
@@ -34,8 +58,10 @@ ggplot() +
     geom_point(data=sample_data, aes(longitude, latitude), size=1)
 
 ggsave("france_sample_map.pdf")
-
+ggsave("france_sample_map.png")
 ```
+![France map](../04_analysis/france_sample_map.png) 
+
 
 
 ## Zoomed in view of the sampling sites
@@ -74,4 +100,7 @@ map <- mapview(data_shapefile,
 #view map 
 mapshot(map, file="france_sample_map_zoom.pdf", remove_controls = c("zoomControl", "layersControl", "homeButton","drawToolbar", "easyButton"))
 
+mapshot(map, file="france_sample_map_zoom.png", remove_controls = c("zoomControl", "layersControl", "homeButton","drawToolbar", "easyButton"))
+
 ```
+![zoomed map](../04_analysis/france_sample_map_zoom.png) 
