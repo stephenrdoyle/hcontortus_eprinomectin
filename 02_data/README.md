@@ -11,7 +11,7 @@ G means Genomics, T means Transcriptomics.
 If any link is failed, you can inform the corresponding author.  
 Use `wget -c` to download files.  
 
-## Genomics data manifest file
+## Genomics data manifest file (rename it with .manifest extension)
 
 ```
 ID,R1,R2
@@ -23,7 +23,7 @@ Hc_G_S_CHI_B_1,ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR140/083/ERR14002283/ERR1400
 Hc_G_S_LUC_B_1,ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR140/085/ERR14002285/ERR14002285_1.fastq.gz,ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR140/085/ERR14002285/ERR14002285_2.fastq.gz
 ```
 
-## Transcriptomics data manifest file
+## Transcriptomics data manifest file (rename it with .manifest extension)
 
 ```
 ID,R1,R2
