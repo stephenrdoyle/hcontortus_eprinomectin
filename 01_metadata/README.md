@@ -1,7 +1,7 @@
 # Metadata on samples used
 Samples were collected in the French Pyrenees, managed, and tested for resistance status, by Jouffroy et al. 2023 and Petermann et al. 2025, at UMR 1436 InTheRes / UMR 1225 IHAP, part of National Veterinary School of Toulouse, INRAE, and University of Toulouse, France.  
 Samples were sequenced at the Wellcome Sanger Institute in UK, operated under the supervision of Stephen R. Doyle, Parasites and Microbes team leader.  
-Adaptor sequences are, for R1, AGATCGGAAGAGCACACGTCTGAACTCCAGTCA, and for R2, AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT (cf. the kits used).
+Adaptor sequences are, for R1, AGATCGGAAGAGCACACGTCTGAACTCCAGTCA, and for R2, AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT (cf. the kits used).  
 R means Resistant, S means Susceptible to eprinomectin treatment.  
 Sample IDs are IDs from the sequencing team, not meaningful IDs.  
 For transcriptomics, the number of individuals collected is between 15 and 20, not fixed.  
