@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
 # PREREQUISITES
-#
 # - you are on an HPC cluster
 # - your job scheduler is LSF (bsub)
 # - Singularity module is loaded
@@ -16,6 +15,10 @@
 # - if an analysis-stage directory is absent, it is created and launched,
 # - if the the run fails, manually remove the last stage directory (the stage failed), and rerun,
 # - each output is first written to a .tmp.XXXXXX path and is renamed only after successful completion, so remaining of .tmp.XXXXXX files means that the stage is corrupted.
+#
+# WARNING
+# Launch this pipeline using bsub on a long queue to avoid any interruption before it’s terminated.
+# Command example : bsub -q long -J pipeline -n 1 -R "rusage[mem=500]" -M 500 bash genomics.sh
 
 set -euo pipefail
 IFS=$'\n\t'
