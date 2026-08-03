@@ -9,6 +9,7 @@ G means Genomics, T means Transcriptomics.
 * Third column is the R2 download link.
 
 If any link is failed, you can inform the corresponding author.
+Use `wget -c` to download files.
 
 ## Genomics data manifest file
 
