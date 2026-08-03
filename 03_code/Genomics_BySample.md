@@ -1,4 +1,8 @@
 # Prerequisites
 
-You are on HPC cluster, with LSF environment, and Singularity module loaded.
+You are :
+
+* on HPC cluster,
+* with LSF environment,
+* and Singularity module loaded.
 
