@@ -18,7 +18,7 @@
 #
 # WARNING
 # Launch this pipeline using bsub on a long queue to avoid any interruption before it’s terminated.
-# Command example : bsub -q long -J pipeline -n 1 -R "select[mem>2000] rusage[mem=2000]" -M 2000 -o "GenPipTrial.%J.out" -e "GenPipTrial.%J.err" bash genomics.sh
+# Command example : bsub -q long -J pipeline -n 1 -R "select[mem>=2000] rusage[mem=2000] span[hosts=1]" -M 2000 -o "GenPipTrial.%J.out" -e "GenPipTrial.%J.err" bash genomics.sh
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -49,7 +49,7 @@ if [[ ! -d "${ROOT}/0_samples" ]]; then
             bsub \
                 -J "DL_${id}" \
                 -n 1 \
-                -R "rusage[mem=2000]" \
+                -R "select[mem>=2000] rusage[mem=2000] span[hosts=1]" \
                 -M 2000 \
                 -o "${ROOT}/0_samples/${id}/DL_${id}.%J.out" \
                 -e "${ROOT}/0_samples/${id}/DL_${id}.%J.err" \
@@ -123,7 +123,7 @@ if [[ ! -d "${ROOT}/1_QC" ]]; then
             bsub \
                 -J "QC_${id}" \
                 -n 4 \
-                -R "rusage[mem=4000]" \
+                -R "select[mem>=4000] rusage[mem=4000] span[hosts=1]" \
                 -M 4000 \
                 -o "${ROOT}/1_QC/fastqc/QC_${id}.%J.out" \
                 -e "${ROOT}/1_QC/fastqc/QC_${id}.%J.err" \
@@ -158,7 +158,7 @@ mv "${tmpdir}" "${ROOT}/1_QC/fastqc/${ID}"
         bsub \
             -J "QC_MultiQC" \
             -n 1 \
-            -R "rusage[mem=8000]" \
+            -R "select[mem>=8000] rusage[mem=8000] span[hosts=1]" \
             -M 8000 \
             -o "${ROOT}/1_QC/QC_MultiQC.%J.out" \
             -e "${ROOT}/1_QC/QC_MultiQC.%J.err" \
@@ -228,7 +228,7 @@ if [[ ! -d "${ROOT}/2_mapping" ]]; then
         bsub \
             -J "HcoMap" \
             -n 1 \
-            -R "rusage[mem=80000]" \
+            -R "select[mem>=80000] rusage[mem=80000] span[hosts=1]" \
             -M 80000 \
             -o "${ROOT}/2_mapping/HcoMap.%J.out" \
             -e "${ROOT}/2_mapping/HcoMap.%J.err" \
@@ -263,7 +263,7 @@ mv "${tmpdir}" "${ROOT}/2_mapping/outputs"
         bsub \
             -J "Map_MultiQC" \
             -n 1 \
-            -R "rusage[mem=8000]" \
+            -R "select[mem>=8000] rusage[mem=8000] span[hosts=1]" \
             -M 8000 \
             -o "${ROOT}/2_mapping/Map_MultiQC.%J.out" \
             -e "${ROOT}/2_mapping/Map_MultiQC.%J.err" \
@@ -359,7 +359,7 @@ if [[ ! -d "${ROOT}/3_variants" ]]; then
             bsub \
                 -J "HcoSnpEffDB" \
                 -n 4 \
-                -R "rusage[mem=12000]" \
+                -R "select[mem>=12000] rusage[mem=12000] span[hosts=1]" \
                 -M 12000 \
                 -o "${ROOT}/0_tools/HcoSnpEffDB.%J.out" \
                 -e "${ROOT}/0_tools/HcoSnpEffDB.%J.err" \
@@ -416,7 +416,7 @@ mv "${tmpdir}" "${ROOT}/0_tools/snpeff_Hco_WBPS18"
             bsub \
                 -J "VAR_${id}" \
                 -n 4 \
-                -R "rusage[mem=16000]" \
+                -R "select[mem>=16000] rusage[mem=16000] span[hosts=1]" \
                 -M 16000 \
                 -o "${ROOT}/3_variants/per_sample/${id}/VAR_${id}.%J.out" \
                 -e "${ROOT}/3_variants/per_sample/${id}/VAR_${id}.%J.err" \
@@ -572,7 +572,7 @@ mv "${annotated_tmp}.tbi" "${ROOT}/3_variants/per_sample/${ID}/${ID}.annotated.v
         bsub \
             -J "HcoMergeVCF" \
             -n 4 \
-            -R "rusage[mem=16000]" \
+            -R "select[mem>=16000] rusage[mem=16000] span[hosts=1]" \
             -M 16000 \
             -o "${ROOT}/3_variants/merged/HcoMergeVCF.%J.out" \
             -e "${ROOT}/3_variants/merged/HcoMergeVCF.%J.err" \
@@ -648,7 +648,7 @@ if [[ ! -d "${ROOT}/4_FST" ]]; then
         bsub \
             -J "HcoFST" \
             -n 16 \
-            -R "rusage[mem=32000]" \
+            -R "select[mem>=32000] rusage[mem=32000] span[hosts=1]" \
             -M 32000 \
             -o "${ROOT}/4_FST/HcoFST.%J.out" \
             -e "${ROOT}/4_FST/HcoFST.%J.err" \
