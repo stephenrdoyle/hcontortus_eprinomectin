@@ -51,6 +51,8 @@ if [[ ! -d "${ROOT}/0_samples" ]]; then
                 -n 1 \
                 -R "rusage[mem=2000]" \
                 -M 2000 \
+                -o "${ROOT}/0_samples/${id}/DL_${id}.%J.out" \
+                -e "${ROOT}/0_samples/${id}/DL_${id}.%J.err" \
                 bash -lc '
 set -euo pipefail
 
@@ -123,6 +125,8 @@ if [[ ! -d "${ROOT}/1_QC" ]]; then
                 -n 4 \
                 -R "rusage[mem=4000]" \
                 -M 4000 \
+                -o "${ROOT}/1_QC/fastqc/QC_${id}.%J.out" \
+                -e "${ROOT}/1_QC/fastqc/QC_${id}.%J.err" \
                 bash -lc '
 set -euo pipefail
 
@@ -156,6 +160,8 @@ mv "${tmpdir}" "${ROOT}/1_QC/fastqc/${ID}"
             -n 1 \
             -R "rusage[mem=8000]" \
             -M 8000 \
+            -o "${ROOT}/1_QC/QC_MultiQC.%J.out" \
+            -e "${ROOT}/1_QC/QC_MultiQC.%J.err" \
             bash -lc '
 set -euo pipefail
 
@@ -224,6 +230,8 @@ if [[ ! -d "${ROOT}/2_mapping" ]]; then
             -n 1 \
             -R "rusage[mem=80000]" \
             -M 80000 \
+            -o "${ROOT}/2_mapping/HcoMap.%J.out" \
+            -e "${ROOT}/2_mapping/HcoMap.%J.err" \
             bash -lc '
 set -euo pipefail
 
@@ -257,6 +265,8 @@ mv "${tmpdir}" "${ROOT}/2_mapping/outputs"
             -n 1 \
             -R "rusage[mem=8000]" \
             -M 8000 \
+            -o "${ROOT}/2_mapping/Map_MultiQC.%J.out" \
+            -e "${ROOT}/2_mapping/Map_MultiQC.%J.err" \
             bash -lc '
 set -euo pipefail
 
@@ -351,6 +361,8 @@ if [[ ! -d "${ROOT}/3_variants" ]]; then
                 -n 4 \
                 -R "rusage[mem=12000]" \
                 -M 12000 \
+                -o "${ROOT}/0_tools/HcoSnpEffDB.%J.out" \
+                -e "${ROOT}/0_tools/HcoSnpEffDB.%J.err" \
                 bash -lc '
 set -euo pipefail
 
@@ -406,6 +418,8 @@ mv "${tmpdir}" "${ROOT}/0_tools/snpeff_Hco_WBPS18"
                 -n 4 \
                 -R "rusage[mem=16000]" \
                 -M 16000 \
+                -o "${ROOT}/3_variants/per_sample/${id}/VAR_${id}.%J.out" \
+                -e "${ROOT}/3_variants/per_sample/${id}/VAR_${id}.%J.err" \
                 bash -lc '
 set -euo pipefail
 
@@ -560,6 +574,8 @@ mv "${annotated_tmp}.tbi" "${ROOT}/3_variants/per_sample/${ID}/${ID}.annotated.v
             -n 4 \
             -R "rusage[mem=16000]" \
             -M 16000 \
+            -o "${ROOT}/3_variants/merged/HcoMergeVCF.%J.out" \
+            -e "${ROOT}/3_variants/merged/HcoMergeVCF.%J.err" \
             bash -lc '
 set -euo pipefail
 
@@ -634,6 +650,8 @@ if [[ ! -d "${ROOT}/4_FST" ]]; then
             -n 16 \
             -R "rusage[mem=32000]" \
             -M 32000 \
+            -o "${ROOT}/4_FST/HcoFST.%J.out" \
+            -e "${ROOT}/4_FST/HcoFST.%J.err" \
             bash -lc '
 set -euo pipefail
 
