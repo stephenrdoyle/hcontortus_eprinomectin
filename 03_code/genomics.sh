@@ -18,7 +18,7 @@
 #
 # WARNING
 # Launch this pipeline using bsub on a long queue to avoid any interruption before it’s terminated.
-# Command example : bsub -q long -J pipeline -n 1 -R "rusage[mem=2000]" -M 2000 -o "GenPipTrial.%J.out" -e "GenPipTrial.%J.err" bash genomics.sh
+# Command example : bsub -q long -J pipeline -n 1 -R "select[mem>2000] rusage[mem=2000]" -M 2000 -o "GenPipTrial.%J.out" -e "GenPipTrial.%J.err" bash genomics.sh
 
 set -euo pipefail
 IFS=$'\n\t'
