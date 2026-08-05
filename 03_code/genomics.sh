@@ -29,6 +29,34 @@ REFERENCE="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.fa' -print -qu
 ANNOTATION="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.gtf' -print -quit)"
 
 
+# Wait for an LSF job and stop the pipeline if the job did not finish
+# successfully. The LSF status must be DONE; EXIT or any unknown status
+# causes an immediate pipeline failure.
+wait_for_job() {
+    local jid="$1"
+    local status
+
+    if [[ ! "${jid}" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: invalid or missing LSF job ID: '${jid}'." >&2
+        exit 1
+    fi
+
+    bwait -w "ended(${jid})"
+
+    status="$(
+        bjobs -a -noheader -o "stat" "${jid}" 2>/dev/null \
+        | awk 'NF {print $1; exit}' \
+        || true
+    )"
+
+    if [[ "${status}" != "DONE" ]]; then
+        echo "ERROR: LSF job ${jid} ended with status '${status:-UNKNOWN}'." >&2
+        echo "Pipeline stopped. Remove the failed stage directory before rerunning." >&2
+        exit 1
+    fi
+}
+
+
 # ==============================================================================
 # 0_samples — sequential acquisition of paired-end FASTQ files with wget -c
 # ==============================================================================
@@ -76,7 +104,7 @@ mv "${tmp_r2}" "${final_r2}"
 
         echo "${submission}"
         jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-        bwait -w "ended(${jid})"
+        wait_for_job "${jid}"
     done < "${MANIFEST}"
 fi
 
@@ -150,7 +178,7 @@ mv "${tmpdir}" "${ROOT}/1_QC/fastqc/${ID}"
     done < "${MANIFEST}"
 
     for jid in "${jobs[@]}"; do
-        bwait -w "ended(${jid})"
+        wait_for_job "${jid}"
     done
 
     submission="$(
@@ -181,7 +209,7 @@ mv "${tmpdir}" "${ROOT}/1_QC/multiqc"
 
     echo "${submission}"
     jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-    bwait -w "ended(${jid})"
+    wait_for_job "${jid}"
 fi
 
 
@@ -256,7 +284,7 @@ mv "${tmpdir}" "${ROOT}/2_mapping/outputs"
 
     echo "${submission}"
     jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-    bwait -w "ended(${jid})"
+    wait_for_job "${jid}"
 
     submission="$(
         ROOT="${ROOT}" \
@@ -286,7 +314,7 @@ mv "${tmpdir}" "${ROOT}/2_mapping/multiqc"
 
     echo "${submission}"
     jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-    bwait -w "ended(${jid})"
+    wait_for_job "${jid}"
 fi
 
 
@@ -400,7 +428,7 @@ mv "${tmpdir}" "${ROOT}/0_tools/snpeff_Hco_WBPS18"
 
         echo "${submission}"
         jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-        bwait -w "ended(${jid})"
+        wait_for_job "${jid}"
     fi
 
     jobs=()
@@ -562,7 +590,7 @@ mv "${annotated_tmp}.tbi" "${ROOT}/3_variants/per_sample/${ID}/${ID}.annotated.v
     done < "${MANIFEST}"
 
     for jid in "${jobs[@]}"; do
-        bwait -w "ended(${jid})"
+        wait_for_job "${jid}"
     done
 
     mkdir -p "${ROOT}/3_variants/merged"
@@ -617,7 +645,7 @@ mv "${merged_tmp}.tbi" "${ROOT}/3_variants/merged/Hco.multisample.annotated.vcf.
 
     echo "${submission}"
     jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-    bwait -w "ended(${jid})"
+    wait_for_job "${jid}"
 fi
 
 
@@ -693,7 +721,7 @@ mv "${tmpdir}" "${ROOT}/4_FST/windows_5kb"
 
     echo "${submission}"
     jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-    bwait -w "ended(${jid})"
+    wait_for_job "${jid}"
 fi
 
 echo "Pipeline completed."
