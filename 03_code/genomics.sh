@@ -29,10 +29,9 @@ MANIFEST="$(find "${ROOT}" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
 REFERENCE="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.fa' -print -quit)"
 ANNOTATION="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.gtf' -print -quit)"
 
-
 # Wait for an LSF job and stop the pipeline if the job did not finish
-# successfully. The LSF status must be DONE; EXIT or any unknown status
-# causes an immediate pipeline failure.
+# successfully. After bwait reports that the job has ended, wait until
+# bjobs exposes its final DONE or EXIT status.
 wait_for_job() {
     local jid="$1"
     local status
@@ -44,19 +43,28 @@ wait_for_job() {
 
     bwait -w "ended(${jid})"
 
-    status="$(
-        bjobs -a -noheader -o "stat" "${jid}" 2>/dev/null \
-        | awk 'NF {print $1; exit}' \
-        || true
-    )"
+    while true; do
+        status="$(
+            bjobs -a -noheader -o "stat" "${jid}" 2>/dev/null \
+            | awk 'NF {print $1; exit}' \
+            || true
+        )"
 
-    if [[ "${status}" != "DONE" ]]; then
-        echo "ERROR: LSF job ${jid} ended with status '${status:-UNKNOWN}'." >&2
-        echo "Pipeline stopped. Remove the failed temporary stage directory before rerunning." >&2
-        exit 1
-    fi
+        case "${status}" in
+            DONE)
+                return 0
+                ;;
+            EXIT)
+                echo "ERROR: LSF job ${jid} ended with status EXIT." >&2
+                echo "Pipeline stopped. Remove the failed temporary stage directory before rerunning." >&2
+                exit 1
+                ;;
+            *)
+                sleep 2
+                ;;
+        esac
+    done
 }
-
 
 # ==============================================================================
 # 0_samples — sequential acquisition of paired-end FASTQ files with wget -c
