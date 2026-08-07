@@ -282,17 +282,64 @@ set -euo pipefail
 source /etc/profile.d/modules.sh
 module load mapping-helminth/v1.0.8
 
+# The mapping-helminth module currently exposes an obsolete shared Singularity
+# image library (/software/pathogen/images). Disable this library and use a
+# persistent project-local cache on the shared filesystem instead.
+unset NEXTFLOW_SINGULARITY_LIBRARY
+unset NXF_SINGULARITY_LIBRARYDIR
+
+export NXF_SINGULARITY_CACHEDIR="${ROOT}/0_tools/nextflow_singularity_cache"
+mkdir -p "${NXF_SINGULARITY_CACHEDIR}"
+
 tmpdir="$(mktemp -d "${STAGE}/.outputs.tmp.XXXXXX")"
 export NXF_WORK="${STAGE}/work"
-export NXF_LOG_FILE=/dev/null
+export NXF_LOG_FILE="${STAGE}/nextflow.log"
 mkdir -p "${NXF_WORK}" "${STAGE}/index_cache"
 
+# mapping-helminth currently ignores some failed Nextflow processes.
+# Force the complete Nextflow run to return a non-zero exit status whenever
+# at least one process failed and was ignored.
+cat > "${STAGE}/nextflow_override.config" <<EOF
+workflow.failOnIgnore = true
+
+singularity {
+    cacheDir = "${ROOT}/0_tools/nextflow_singularity_cache"
+}
+EOF
+
 mapping-helminth \
+    -c "${STAGE}/nextflow_override.config" \
     --reference "${REFERENCE}" \
     --input "${STAGE}/fqpaths.manifest" \
     --outdir "${tmpdir}" \
     --index_cache "${STAGE}/index_cache" \
     --keep_unmapped true
+
+# Independently verify that mapping produced the expected BAM and BAM index
+# for every sample before accepting the stage as successfully completed.
+missing=0
+
+while IFS=, read -r id r1 r2; do
+    id="${id//$'\r'/}"
+    [[ "${id}" == "ID" || -z "${id}" ]] && continue
+
+    bam="${tmpdir}/${id}/${id}.bam"
+
+    if [[ ! -s "${bam}" ]]; then
+        echo "ERROR: missing BAM for sample ${id}: ${bam}" >&2
+        missing=1
+    fi
+
+    if [[ ! -s "${bam}.bai" && ! -s "${tmpdir}/${id}/${id}.bai" ]]; then
+        echo "ERROR: missing BAM index for sample ${id}." >&2
+        missing=1
+    fi
+done < "${STAGE}/fqpaths.manifest"
+
+if (( missing != 0 )); then
+    echo "ERROR: mapping completed incompletely. Pipeline stopped." >&2
+    exit 1
+fi
 
 mv "${tmpdir}" "${STAGE}/outputs"
 '
