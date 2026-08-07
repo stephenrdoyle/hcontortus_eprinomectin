@@ -12,9 +12,10 @@
 #   sample_1,ftp://.../sample_1_R1.fastq.gz,ftp://.../sample_1_R2.fastq.gz
 #
 # EXECUTION PRINCIPLE
-# - if an analysis-stage directory is absent, it is created and launched,
-# - if the the run fails, manually remove the last stage directory (the stage failed), and rerun,
-# - each output is first written to a .tmp.XXXXXX path and is renamed only after successful completion, so remaining of .tmp.XXXXXX files means that the stage is corrupted.
+# - if an analysis-stage directory is absent, a temporary stage directory is created and launched,
+# - the temporary stage directory is renamed to the final stage directory only after successful completion,
+# - if the run fails, manually remove the remaining temporary stage directory and rerun,
+# - each output is first written to a .tmp.XXXXXX path and is renamed only after successful completion, so remaining .tmp.XXXXXX files or directories mean that the stage is corrupted.
 #
 # WARNING
 # Launch this pipeline using bsub on a long queue to avoid any interruption before it’s terminated.
@@ -51,7 +52,7 @@ wait_for_job() {
 
     if [[ "${status}" != "DONE" ]]; then
         echo "ERROR: LSF job ${jid} ended with status '${status:-UNKNOWN}'." >&2
-        echo "Pipeline stopped. Remove the failed stage directory before rerunning." >&2
+        echo "Pipeline stopped. Remove the failed temporary stage directory before rerunning." >&2
         exit 1
     fi
 }
@@ -62,7 +63,8 @@ wait_for_job() {
 # ==============================================================================
 if [[ ! -d "${ROOT}/0_samples" ]]; then
     echo "Creating and running 0_samples"
-    mkdir -p "${ROOT}/0_samples"
+
+    STAGE="$(mktemp -d "${ROOT}/0_samples.tmp.XXXXXX")"
 
     while IFS=, read -r id r1 r2; do
         id="${id//$'\r'/}"
@@ -70,32 +72,32 @@ if [[ ! -d "${ROOT}/0_samples" ]]; then
         r2="${r2//$'\r'/}"
         [[ "${id}" == "ID" || -z "${id}" ]] && continue
 
-        mkdir -p "${ROOT}/0_samples/${id}"
+        mkdir -p "${STAGE}/${id}"
 
         submission="$(
-            ROOT="${ROOT}" ID="${id}" URL_R1="${r1}" URL_R2="${r2}" \
+            ROOT="${ROOT}" STAGE="${STAGE}" ID="${id}" URL_R1="${r1}" URL_R2="${r2}" \
             bsub \
                 -J "DL_${id}" \
                 -n 1 \
                 -R "select[mem>=2000] rusage[mem=2000] span[hosts=1]" \
                 -M 2000 \
-                -o "${ROOT}/0_samples/${id}/DL_${id}.%J.out" \
-                -e "${ROOT}/0_samples/${id}/DL_${id}.%J.err" \
+                -o "${STAGE}/${id}/DL_${id}.%J.out" \
+                -e "${STAGE}/${id}/DL_${id}.%J.err" \
                 bash -lc '
 set -euo pipefail
 
-final_r1="${ROOT}/0_samples/${ID}/${ID}_R1.fastq.gz"
-tmp_r1="$(find "${ROOT}/0_samples/${ID}" -maxdepth 1 -type f -name ".${ID}_R1.fastq.gz.tmp.*" -print -quit)"
+final_r1="${STAGE}/${ID}/${ID}_R1.fastq.gz"
+tmp_r1="$(find "${STAGE}/${ID}" -maxdepth 1 -type f -name ".${ID}_R1.fastq.gz.tmp.*" -print -quit)"
 if [[ -z "${tmp_r1}" ]]; then
-    tmp_r1="$(mktemp "${ROOT}/0_samples/${ID}/.${ID}_R1.fastq.gz.tmp.XXXXXX")"
+    tmp_r1="$(mktemp "${STAGE}/${ID}/.${ID}_R1.fastq.gz.tmp.XXXXXX")"
 fi
 wget -c -O "${tmp_r1}" "${URL_R1}"
 mv "${tmp_r1}" "${final_r1}"
 
-final_r2="${ROOT}/0_samples/${ID}/${ID}_R2.fastq.gz"
-tmp_r2="$(find "${ROOT}/0_samples/${ID}" -maxdepth 1 -type f -name ".${ID}_R2.fastq.gz.tmp.*" -print -quit)"
+final_r2="${STAGE}/${ID}/${ID}_R2.fastq.gz"
+tmp_r2="$(find "${STAGE}/${ID}" -maxdepth 1 -type f -name ".${ID}_R2.fastq.gz.tmp.*" -print -quit)"
 if [[ -z "${tmp_r2}" ]]; then
-    tmp_r2="$(mktemp "${ROOT}/0_samples/${ID}/.${ID}_R2.fastq.gz.tmp.XXXXXX")"
+    tmp_r2="$(mktemp "${STAGE}/${ID}/.${ID}_R2.fastq.gz.tmp.XXXXXX")"
 fi
 wget -c -O "${tmp_r2}" "${URL_R2}"
 mv "${tmp_r2}" "${final_r2}"
@@ -106,6 +108,8 @@ mv "${tmp_r2}" "${final_r2}"
         jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
         wait_for_job "${jid}"
     done < "${MANIFEST}"
+
+    mv "${STAGE}" "${ROOT}/0_samples"
 fi
 
 
@@ -114,6 +118,8 @@ fi
 # ==============================================================================
 if [[ ! -d "${ROOT}/1_QC" ]]; then
     echo "Creating and running 1_QC"
+
+    STAGE="$(mktemp -d "${ROOT}/1_QC.tmp.XXXXXX")"
 
     mkdir -p "${ROOT}/0_tools"
 
@@ -139,7 +145,7 @@ if [[ ! -d "${ROOT}/1_QC" ]]; then
         mv "${multiqc_tmp}" "${ROOT}/0_tools/multiqc_1.17.sif"
     fi
 
-    mkdir -p "${ROOT}/1_QC/fastqc"
+    mkdir -p "${STAGE}/fastqc"
     jobs=()
 
     while IFS=, read -r id r1 r2; do
@@ -147,18 +153,18 @@ if [[ ! -d "${ROOT}/1_QC" ]]; then
         [[ "${id}" == "ID" || -z "${id}" ]] && continue
 
         submission="$(
-            ROOT="${ROOT}" ID="${id}" \
+            ROOT="${ROOT}" STAGE="${STAGE}" ID="${id}" \
             bsub \
                 -J "QC_${id}" \
                 -n 4 \
                 -R "select[mem>=4000] rusage[mem=4000] span[hosts=1]" \
                 -M 4000 \
-                -o "${ROOT}/1_QC/fastqc/QC_${id}.%J.out" \
-                -e "${ROOT}/1_QC/fastqc/QC_${id}.%J.err" \
+                -o "${STAGE}/fastqc/QC_${id}.%J.out" \
+                -e "${STAGE}/fastqc/QC_${id}.%J.err" \
                 bash -lc '
 set -euo pipefail
 
-tmpdir="$(mktemp -d "${ROOT}/1_QC/fastqc/.${ID}.tmp.XXXXXX")"
+tmpdir="$(mktemp -d "${STAGE}/fastqc/.${ID}.tmp.XXXXXX")"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
@@ -169,7 +175,7 @@ singularity exec \
     "${ROOT}/0_samples/${ID}/${ID}_R1.fastq.gz" \
     "${ROOT}/0_samples/${ID}/${ID}_R2.fastq.gz"
 
-mv "${tmpdir}" "${ROOT}/1_QC/fastqc/${ID}"
+mv "${tmpdir}" "${STAGE}/fastqc/${ID}"
 '
         )"
 
@@ -182,18 +188,18 @@ mv "${tmpdir}" "${ROOT}/1_QC/fastqc/${ID}"
     done
 
     submission="$(
-        ROOT="${ROOT}" \
+        ROOT="${ROOT}" STAGE="${STAGE}" \
         bsub \
             -J "QC_MultiQC" \
             -n 1 \
             -R "select[mem>=8000] rusage[mem=8000] span[hosts=1]" \
             -M 8000 \
-            -o "${ROOT}/1_QC/QC_MultiQC.%J.out" \
-            -e "${ROOT}/1_QC/QC_MultiQC.%J.err" \
+            -o "${STAGE}/QC_MultiQC.%J.out" \
+            -e "${STAGE}/QC_MultiQC.%J.err" \
             bash -lc '
 set -euo pipefail
 
-tmpdir="$(mktemp -d "${ROOT}/1_QC/.multiqc.tmp.XXXXXX")"
+tmpdir="$(mktemp -d "${STAGE}/.multiqc.tmp.XXXXXX")"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
@@ -201,15 +207,17 @@ singularity exec \
     multiqc \
     --filename raw_reads_multiqc.html \
     --outdir "${tmpdir}" \
-    "${ROOT}/1_QC/fastqc"
+    "${STAGE}/fastqc"
 
-mv "${tmpdir}" "${ROOT}/1_QC/multiqc"
+mv "${tmpdir}" "${STAGE}/multiqc"
 '
     )"
 
     echo "${submission}"
     jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
     wait_for_job "${jid}"
+
+    mv "${STAGE}" "${ROOT}/1_QC"
 fi
 
 
@@ -219,6 +227,8 @@ fi
 # ==============================================================================
 if [[ ! -d "${ROOT}/2_mapping" ]]; then
     echo "Creating and running 2_mapping"
+
+    STAGE="$(mktemp -d "${ROOT}/2_mapping.tmp.XXXXXX")"
 
     mkdir -p "${ROOT}/0_tools"
 
@@ -233,9 +243,7 @@ if [[ ! -d "${ROOT}/2_mapping" ]]; then
         mv "${multiqc_tmp}" "${ROOT}/0_tools/multiqc_1.17.sif"
     fi
 
-    mkdir -p "${ROOT}/2_mapping"
-
-    manifest_tmp="$(mktemp "${ROOT}/2_mapping/.fqpaths.manifest.tmp.XXXXXX")"
+    manifest_tmp="$(mktemp "${STAGE}/.fqpaths.manifest.tmp.XXXXXX")"
     printf 'ID,R1,R2\n' > "${manifest_tmp}"
 
     while IFS=, read -r id r1 r2; do
@@ -249,36 +257,36 @@ if [[ ! -d "${ROOT}/2_mapping" ]]; then
             >> "${manifest_tmp}"
     done < "${MANIFEST}"
 
-    mv "${manifest_tmp}" "${ROOT}/2_mapping/fqpaths.manifest"
+    mv "${manifest_tmp}" "${STAGE}/fqpaths.manifest"
 
     submission="$(
-        ROOT="${ROOT}" REFERENCE="${REFERENCE}" \
+        ROOT="${ROOT}" STAGE="${STAGE}" REFERENCE="${REFERENCE}" \
         bsub \
             -J "HcoMap" \
             -n 1 \
             -R "select[mem>=80000] rusage[mem=80000] span[hosts=1]" \
             -M 80000 \
-            -o "${ROOT}/2_mapping/HcoMap.%J.out" \
-            -e "${ROOT}/2_mapping/HcoMap.%J.err" \
+            -o "${STAGE}/HcoMap.%J.out" \
+            -e "${STAGE}/HcoMap.%J.err" \
             bash -lc '
 set -euo pipefail
 
 source /etc/profile.d/modules.sh
 module load mapping-helminth/v1.0.8
 
-tmpdir="$(mktemp -d "${ROOT}/2_mapping/.outputs.tmp.XXXXXX")"
-export NXF_WORK="${ROOT}/2_mapping/work"
+tmpdir="$(mktemp -d "${STAGE}/.outputs.tmp.XXXXXX")"
+export NXF_WORK="${STAGE}/work"
 export NXF_LOG_FILE=/dev/null
-mkdir -p "${NXF_WORK}" "${ROOT}/2_mapping/index_cache"
+mkdir -p "${NXF_WORK}" "${STAGE}/index_cache"
 
 mapping-helminth \
     --reference "${REFERENCE}" \
-    --input "${ROOT}/2_mapping/fqpaths.manifest" \
+    --input "${STAGE}/fqpaths.manifest" \
     --outdir "${tmpdir}" \
-    --index_cache "${ROOT}/2_mapping/index_cache" \
+    --index_cache "${STAGE}/index_cache" \
     --keep_unmapped true
 
-mv "${tmpdir}" "${ROOT}/2_mapping/outputs"
+mv "${tmpdir}" "${STAGE}/outputs"
 '
     )"
 
@@ -287,18 +295,18 @@ mv "${tmpdir}" "${ROOT}/2_mapping/outputs"
     wait_for_job "${jid}"
 
     submission="$(
-        ROOT="${ROOT}" \
+        ROOT="${ROOT}" STAGE="${STAGE}" \
         bsub \
             -J "Map_MultiQC" \
             -n 1 \
             -R "select[mem>=8000] rusage[mem=8000] span[hosts=1]" \
             -M 8000 \
-            -o "${ROOT}/2_mapping/Map_MultiQC.%J.out" \
-            -e "${ROOT}/2_mapping/Map_MultiQC.%J.err" \
+            -o "${STAGE}/Map_MultiQC.%J.out" \
+            -e "${STAGE}/Map_MultiQC.%J.err" \
             bash -lc '
 set -euo pipefail
 
-tmpdir="$(mktemp -d "${ROOT}/2_mapping/.multiqc.tmp.XXXXXX")"
+tmpdir="$(mktemp -d "${STAGE}/.multiqc.tmp.XXXXXX")"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
@@ -306,15 +314,17 @@ singularity exec \
     multiqc \
     --filename mapping_multiqc.html \
     --outdir "${tmpdir}" \
-    "${ROOT}/2_mapping/outputs"
+    "${STAGE}/outputs"
 
-mv "${tmpdir}" "${ROOT}/2_mapping/multiqc"
+mv "${tmpdir}" "${STAGE}/multiqc"
 '
     )"
 
     echo "${submission}"
     jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
     wait_for_job "${jid}"
+
+    mv "${STAGE}" "${ROOT}/2_mapping"
 fi
 
 
@@ -325,6 +335,8 @@ fi
 # ==============================================================================
 if [[ ! -d "${ROOT}/3_variants" ]]; then
     echo "Creating and running 3_variants"
+
+    STAGE="$(mktemp -d "${ROOT}/3_variants.tmp.XXXXXX")"
 
     mkdir -p "${ROOT}/0_tools"
 
@@ -376,8 +388,8 @@ if [[ ! -d "${ROOT}/3_variants" ]]; then
         mv "${reference_tmp}.fai" "${REFERENCE}.fai"
     fi
 
-    mkdir -p "${ROOT}/3_variants/filtered_bam"
-    mkdir -p "${ROOT}/3_variants/per_sample"
+    mkdir -p "${STAGE}/filtered_bam"
+    mkdir -p "${STAGE}/per_sample"
 
     # The species-specific database is built from the same WBPS18 genome and
     # annotation used for mapping and subsequent genomic interpretation.
@@ -437,21 +449,21 @@ mv "${tmpdir}" "${ROOT}/0_tools/snpeff_Hco_WBPS18"
         id="${id//$'\r'/}"
         [[ "${id}" == "ID" || -z "${id}" ]] && continue
 
-        mkdir -p "${ROOT}/3_variants/per_sample/${id}"
+        mkdir -p "${STAGE}/per_sample/${id}"
 
         submission="$(
-            ROOT="${ROOT}" REFERENCE="${REFERENCE}" ID="${id}" \
+            ROOT="${ROOT}" STAGE="${STAGE}" REFERENCE="${REFERENCE}" ID="${id}" \
             bsub \
                 -J "VAR_${id}" \
                 -n 4 \
                 -R "select[mem>=16000] rusage[mem=16000] span[hosts=1]" \
                 -M 16000 \
-                -o "${ROOT}/3_variants/per_sample/${id}/VAR_${id}.%J.out" \
-                -e "${ROOT}/3_variants/per_sample/${id}/VAR_${id}.%J.err" \
+                -o "${STAGE}/per_sample/${id}/VAR_${id}.%J.out" \
+                -e "${STAGE}/per_sample/${id}/VAR_${id}.%J.err" \
                 bash -lc '
 set -euo pipefail
 
-filtered_tmp="$(mktemp "${ROOT}/3_variants/filtered_bam/.${ID}.q21.bam.tmp.XXXXXX")"
+filtered_tmp="$(mktemp "${STAGE}/filtered_bam/.${ID}.q21.bam.tmp.XXXXXX")"
 rm -f "${filtered_tmp}"
 
 singularity exec \
@@ -472,10 +484,10 @@ singularity exec \
     -o "${filtered_tmp}.bai" \
     "${filtered_tmp}"
 
-mv "${filtered_tmp}" "${ROOT}/3_variants/filtered_bam/${ID}.q21.bam"
-mv "${filtered_tmp}.bai" "${ROOT}/3_variants/filtered_bam/${ID}.q21.bam.bai"
+mv "${filtered_tmp}" "${STAGE}/filtered_bam/${ID}.q21.bam"
+mv "${filtered_tmp}.bai" "${STAGE}/filtered_bam/${ID}.q21.bam.bai"
 
-mpileup_tmp="$(mktemp "${ROOT}/3_variants/per_sample/${ID}/.${ID}.mpileup.bcf.tmp.XXXXXX")"
+mpileup_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.mpileup.bcf.tmp.XXXXXX")"
 rm -f "${mpileup_tmp}"
 
 singularity exec \
@@ -488,9 +500,9 @@ singularity exec \
     -a FORMAT/AD,FORMAT/DP,FORMAT/ADF,FORMAT/ADR \
     -Ob \
     -o "${mpileup_tmp}" \
-    "${ROOT}/3_variants/filtered_bam/${ID}.q21.bam"
+    "${STAGE}/filtered_bam/${ID}.q21.bam"
 
-called_tmp="$(mktemp "${ROOT}/3_variants/per_sample/${ID}/.${ID}.called.bcf.tmp.XXXXXX")"
+called_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.called.bcf.tmp.XXXXXX")"
 rm -f "${called_tmp}"
 
 singularity exec \
@@ -504,7 +516,7 @@ singularity exec \
     -o "${called_tmp}" \
     "${mpileup_tmp}"
 
-norm_preheader_tmp="$(mktemp "${ROOT}/3_variants/per_sample/${ID}/.${ID}.norm.preheader.vcf.gz.tmp.XXXXXX")"
+norm_preheader_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.norm.preheader.vcf.gz.tmp.XXXXXX")"
 rm -f "${norm_preheader_tmp}"
 
 singularity exec \
@@ -520,10 +532,10 @@ singularity exec \
 
 rm -f "${mpileup_tmp}" "${called_tmp}"
 
-sample_name_tmp="$(mktemp "${ROOT}/3_variants/per_sample/${ID}/.${ID}.sample_name.tmp.XXXXXX")"
+sample_name_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.sample_name.tmp.XXXXXX")"
 printf "%s\n" "${ID}" > "${sample_name_tmp}"
 
-norm_tmp="$(mktemp "${ROOT}/3_variants/per_sample/${ID}/.${ID}.norm.vcf.gz.tmp.XXXXXX")"
+norm_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.norm.vcf.gz.tmp.XXXXXX")"
 rm -f "${norm_tmp}"
 
 singularity exec \
@@ -544,10 +556,10 @@ singularity exec \
     -t \
     "${norm_tmp}"
 
-mv "${norm_tmp}" "${ROOT}/3_variants/per_sample/${ID}/${ID}.norm.vcf.gz"
-mv "${norm_tmp}.tbi" "${ROOT}/3_variants/per_sample/${ID}/${ID}.norm.vcf.gz.tbi"
+mv "${norm_tmp}" "${STAGE}/per_sample/${ID}/${ID}.norm.vcf.gz"
+mv "${norm_tmp}.tbi" "${STAGE}/per_sample/${ID}/${ID}.norm.vcf.gz.tbi"
 
-annotated_vcf_tmp="$(mktemp "${ROOT}/3_variants/per_sample/${ID}/.${ID}.annotated.vcf.tmp.XXXXXX")"
+annotated_vcf_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.annotated.vcf.tmp.XXXXXX")"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
@@ -556,10 +568,10 @@ singularity exec \
     -noStats \
     -c "${ROOT}/0_tools/snpeff_Hco_WBPS18/snpEff.config" \
     -v Hco_WBPS18 \
-    "${ROOT}/3_variants/per_sample/${ID}/${ID}.norm.vcf.gz" \
+    "${STAGE}/per_sample/${ID}/${ID}.norm.vcf.gz" \
     > "${annotated_vcf_tmp}"
 
-annotated_tmp="$(mktemp "${ROOT}/3_variants/per_sample/${ID}/.${ID}.annotated.vcf.gz.tmp.XXXXXX")"
+annotated_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.annotated.vcf.gz.tmp.XXXXXX")"
 rm -f "${annotated_tmp}"
 
 singularity exec \
@@ -580,8 +592,8 @@ singularity exec \
     -t \
     "${annotated_tmp}"
 
-mv "${annotated_tmp}" "${ROOT}/3_variants/per_sample/${ID}/${ID}.annotated.vcf.gz"
-mv "${annotated_tmp}.tbi" "${ROOT}/3_variants/per_sample/${ID}/${ID}.annotated.vcf.gz.tbi"
+mv "${annotated_tmp}" "${STAGE}/per_sample/${ID}/${ID}.annotated.vcf.gz"
+mv "${annotated_tmp}.tbi" "${STAGE}/per_sample/${ID}/${ID}.annotated.vcf.gz.tbi"
 '
         )"
 
@@ -593,29 +605,29 @@ mv "${annotated_tmp}.tbi" "${ROOT}/3_variants/per_sample/${ID}/${ID}.annotated.v
         wait_for_job "${jid}"
     done
 
-    mkdir -p "${ROOT}/3_variants/merged"
+    mkdir -p "${STAGE}/merged"
 
     submission="$(
-        ROOT="${ROOT}" MANIFEST="${MANIFEST}" \
+        ROOT="${ROOT}" STAGE="${STAGE}" MANIFEST="${MANIFEST}" \
         bsub \
             -J "HcoMergeVCF" \
             -n 4 \
             -R "select[mem>=16000] rusage[mem=16000] span[hosts=1]" \
             -M 16000 \
-            -o "${ROOT}/3_variants/merged/HcoMergeVCF.%J.out" \
-            -e "${ROOT}/3_variants/merged/HcoMergeVCF.%J.err" \
+            -o "${STAGE}/merged/HcoMergeVCF.%J.out" \
+            -e "${STAGE}/merged/HcoMergeVCF.%J.err" \
             bash -lc '
 set -euo pipefail
 
-vcf_list="$(mktemp "${ROOT}/3_variants/merged/.annotated_vcfs.list.tmp.XXXXXX")"
+vcf_list="$(mktemp "${STAGE}/merged/.annotated_vcfs.list.tmp.XXXXXX")"
 
 while IFS=, read -r id r1 r2; do
     id="${id//$'"'"'\r'"'"'/}"
     [[ "${id}" == "ID" || -z "${id}" ]] && continue
-    printf "%s\n" "${ROOT}/3_variants/per_sample/${id}/${id}.annotated.vcf.gz" >> "${vcf_list}"
+    printf "%s\n" "${STAGE}/per_sample/${id}/${id}.annotated.vcf.gz" >> "${vcf_list}"
 done < "${MANIFEST}"
 
-merged_tmp="$(mktemp "${ROOT}/3_variants/merged/.Hco.multisample.annotated.vcf.gz.tmp.XXXXXX")"
+merged_tmp="$(mktemp "${STAGE}/merged/.Hco.multisample.annotated.vcf.gz.tmp.XXXXXX")"
 rm -f "${merged_tmp}"
 
 singularity exec \
@@ -638,14 +650,16 @@ singularity exec \
     -t \
     "${merged_tmp}"
 
-mv "${merged_tmp}" "${ROOT}/3_variants/merged/Hco.multisample.annotated.vcf.gz"
-mv "${merged_tmp}.tbi" "${ROOT}/3_variants/merged/Hco.multisample.annotated.vcf.gz.tbi"
+mv "${merged_tmp}" "${STAGE}/merged/Hco.multisample.annotated.vcf.gz"
+mv "${merged_tmp}.tbi" "${STAGE}/merged/Hco.multisample.annotated.vcf.gz.tbi"
 '
     )"
 
     echo "${submission}"
     jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
     wait_for_job "${jid}"
+
+    mv "${STAGE}" "${ROOT}/3_variants"
 fi
 
 
@@ -655,6 +669,8 @@ fi
 # ==============================================================================
 if [[ ! -d "${ROOT}/4_FST" ]]; then
     echo "Creating and running 4_FST"
+
+    STAGE="$(mktemp -d "${ROOT}/4_FST.tmp.XXXXXX")"
 
     mkdir -p "${ROOT}/0_tools"
 
@@ -669,17 +685,15 @@ if [[ ! -d "${ROOT}/4_FST" ]]; then
         mv "${grenedalf_tmp}" "${ROOT}/0_tools/grenedalf_0.6.3.sif"
     fi
 
-    mkdir -p "${ROOT}/4_FST"
-
     submission="$(
-        ROOT="${ROOT}" MANIFEST="${MANIFEST}" \
+        ROOT="${ROOT}" STAGE="${STAGE}" MANIFEST="${MANIFEST}" \
         bsub \
             -J "HcoFST" \
             -n 16 \
             -R "select[mem>=32000] rusage[mem=32000] span[hosts=1]" \
             -M 32000 \
-            -o "${ROOT}/4_FST/HcoFST.%J.out" \
-            -e "${ROOT}/4_FST/HcoFST.%J.err" \
+            -o "${STAGE}/HcoFST.%J.out" \
+            -e "${STAGE}/HcoFST.%J.err" \
             bash -lc '
 set -euo pipefail
 
@@ -691,7 +705,7 @@ while IFS=, read -r id r1 r2; do
     bams+=("${ROOT}/2_mapping/outputs/${id}/${id}.bam")
 done < "${MANIFEST}"
 
-tmpdir="$(mktemp -d "${ROOT}/4_FST/.windows_5kb.tmp.XXXXXX")"
+tmpdir="$(mktemp -d "${STAGE}/.windows_5kb.tmp.XXXXXX")"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
@@ -715,13 +729,15 @@ singularity exec \
     --compress \
     --out-dir "${tmpdir}"
 
-mv "${tmpdir}" "${ROOT}/4_FST/windows_5kb"
+mv "${tmpdir}" "${STAGE}/windows_5kb"
 '
     )"
 
     echo "${submission}"
     jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
     wait_for_job "${jid}"
+
+    mv "${STAGE}" "${ROOT}/4_FST"
 fi
 
 echo "Pipeline completed."
