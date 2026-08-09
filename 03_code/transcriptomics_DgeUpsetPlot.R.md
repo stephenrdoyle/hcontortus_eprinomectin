@@ -1,7 +1,3 @@
----
-title: "transcriptomics_DgeUpsetPlot"
-output: html_document
----
 # transcriptomics_DgeUpsetPlot
 This script compares significant genes from several differential gene expression (DGE) result tables and produces **UpSet plots plus export tables**.
 
@@ -10,7 +6,7 @@ This script compares significant genes from several differential gene expression
 **Main outputs:** UpSet PDFs for upregulated, downregulated, separated up/down, and all significant genes, together with long/wide gene tables, presence matrices and exact-intersection tables.
 
 
-```{r}
+```r
 ###############################################
 # transcriptomics_DgeUpsetPlot -> simple DGE UpSet plots
 #
@@ -30,7 +26,7 @@ The analysis logic below stays very close to the original script; the Markdown t
 
 Load the three packages used by the script. **Nothing to edit here** unless your package environment changes.
 
-```{r}
+```r
 # 0. Packages -------------------------------------------------------------
 
 library(tidyverse)
@@ -42,7 +38,7 @@ library(patchwork)
 
 These are the main values you may want to adjust. With the defaults, a gene is retained when **adjusted p-value < 0.05** and **|log2 fold change| ≥ 0.58**.
 
-```{r}
+```r
 # 1. Parameters -----------------------------------------------------------
 
 padj_threshold <- 0.05
@@ -56,7 +52,7 @@ pdf_height <- 8
 
 The script searches the current directory for `.csv` files and uses the part of each filename before the first dot as the dataset name.
 
-```{r}
+```r
 # 2. List files --------------------------------------------------
 
 dge_files <- list.files(pattern = "\\.csv$", full.names = TRUE)
@@ -73,7 +69,7 @@ message(paste(basename(dge_files), collapse = " | "))
 
 For each dataset, this function checks the expected columns, converts the relevant values to numeric format, applies the significance thresholds, and labels retained genes as **up** or **down**.
 
-```{r}
+```r
 # 3. Reading + filtering ---------------------------------------------------
 
 read_and_filter_dge <- function(file,
@@ -144,7 +140,7 @@ read_and_filter_dge <- function(file,
 
 Apply the filtering function to every detected CSV file, combine the results, and print a simple global check.
 
-```{r}
+```r
 # 4. Read all files -----------------------------------------------
 
 dge_list <- lapply(
@@ -169,7 +165,7 @@ message("Total unique genes: ", dplyr::n_distinct(dge_all$gene))
 
 These functions prepare gene sets, presence matrices, export tables, exact intersections and the final UpSet plots. **For routine use, this section normally does not need editing.**
 
-```{r}
+```r
 # 5. Utilities ----------------------------------------------------------
 
 make_sets <- function(df, grouping_col) {
@@ -480,7 +476,7 @@ make_upset_plot <- function(presence_df,
 
 Create four views of the same filtered DGE results: **upregulated**, **downregulated**, **up/down kept separate**, and **all significant genes merged by dataset**.
 
-```{r}
+```r
 # 6. Build groups ------------------------------------------------
 
 up_sets <- dge_all %>%
@@ -526,7 +522,7 @@ if (length(all_sets) > 0) {
 
 Write the filtered genes, presence matrices, exact intersections and group summaries to CSV files for inspection or downstream analysis.
 
-```{r}
+```r
 # 7. Tables ----------------------------------------------------------------
 
 dge_up <- dge_all %>% filter(direction == "up")
@@ -579,7 +575,7 @@ write.csv(summary_table, "UpSet_groups_summary.csv", row.names = FALSE)
 
 Generate the four UpSet plot families. Plot width is adjusted automatically to the number of sets, while `pdf_height` controls the height.
 
-```{r}
+```r
 # 8. PDF figures -----------------------------------------------------------
 
 if (nrow(up_presence) > 0 && length(up_sets) > 0) {
