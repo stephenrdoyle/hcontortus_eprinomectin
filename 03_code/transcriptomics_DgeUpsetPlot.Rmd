@@ -1,0 +1,667 @@
+---
+title: "transcriptomics_DgeUpsetPlot"
+output: html_document
+---
+# transcriptomics_DgeUpsetPlot
+This script compares significant genes from several differential gene expression (DGE) result tables and produces **UpSet plots plus export tables**.
+
+**Expected input:** `.csv` DGE files in the current working directory, with the first column containing gene IDs and with `log2FoldChange` and `padj` columns present.
+
+**Main outputs:** UpSet PDFs for upregulated, downregulated, separated up/down, and all significant genes, together with long/wide gene tables, presence matrices and exact-intersection tables.
+
+
+```{r}
+###############################################
+# transcriptomics_DgeUpsetPlot -> simple DGE UpSet plots
+#
+# Outputs:
+# - 1 PDF Upregulated
+# - 1 PDF Downregulated
+# - 1 Mixed PDF (up/down groups separated)
+# - 1 All significant genes PDF (without separating up/down)
+# - long tables
+# - presence matrices
+# - exact intersections
+###############################################
+```
+The analysis logic below stays very close to the original script; the Markdown text simply makes each stage easier to follow.
+
+## 0. Packages
+
+Load the three packages used by the script. **Nothing to edit here** unless your package environment changes.
+
+```{r}
+# 0. Packages -------------------------------------------------------------
+
+library(tidyverse)
+library(ComplexUpset)
+library(patchwork)
+```
+
+## 1. Parameters
+
+These are the main values you may want to adjust. With the defaults, a gene is retained when **adjusted p-value < 0.05** and **|log2 fold change| ≥ 0.58**.
+
+```{r}
+# 1. Parameters -----------------------------------------------------------
+
+padj_threshold <- 0.05
+log2fc_threshold <- 0.58
+max_intersections <- 50
+pdf_width <- 13
+pdf_height <- 8
+```
+
+## 2. Detect DGE files
+
+The script searches the current directory for `.csv` files and uses the part of each filename before the first dot as the dataset name.
+
+```{r}
+# 2. List files --------------------------------------------------
+
+dge_files <- list.files(pattern = "\\.csv$", full.names = TRUE)
+
+if (length(dge_files) == 0) {
+  stop("No .csv file found in the current directory.")
+}
+
+message("Files detected:")
+message(paste(basename(dge_files), collapse = " | "))
+```
+
+## 3. Read and filter each DGE file
+
+For each dataset, this function checks the expected columns, converts the relevant values to numeric format, applies the significance thresholds, and labels retained genes as **up** or **down**.
+
+```{r}
+# 3. Reading + filtering ---------------------------------------------------
+
+read_and_filter_dge <- function(file,
+                                padj_threshold = 0.05,
+                                log2fc_threshold = 0.58) {
+
+  sample_name <- sub("\\..*$", "", basename(file))
+
+  df <- readr::read_csv(
+    file,
+    show_col_types = FALSE,
+    col_types = cols(.default = col_character())
+  )
+
+  if (ncol(df) < 1) {
+    stop(paste0("Empty or unreadable file: ", file))
+  }
+
+  names(df)[1] <- "gene"
+
+  required_cols <- c("gene", "log2FoldChange", "padj")
+  if (!all(required_cols %in% names(df))) {
+    stop(paste0(
+      "The file ", basename(file),
+      " does not contain the required columns: ",
+      paste(required_cols, collapse = ", "),
+      "\nColumns present: ",
+      paste(names(df), collapse = ", ")
+    ))
+  }
+
+  df <- df %>%
+    mutate(
+      gene = as.character(gene),
+      log2FoldChange = suppressWarnings(as.numeric(log2FoldChange)),
+      padj = suppressWarnings(as.numeric(padj))
+    )
+
+  df_filt <- df %>%
+    filter(
+      !is.na(gene),
+      gene != "",
+      !is.na(padj),
+      padj < padj_threshold,
+      !is.na(log2FoldChange),
+      abs(log2FoldChange) >= log2fc_threshold
+    ) %>%
+    mutate(
+      sample = sample_name,
+      direction = if_else(log2FoldChange > 0, "up", "down"),
+      group = paste(
+        sample,
+        if_else(log2FoldChange > 0, "+", "-"),
+        sep = "_"
+      )
+    ) %>%
+    distinct(sample, direction, group, gene, .keep_all = TRUE)
+
+  message("== ", basename(file), " ==")
+  message("Significant genes retained: ", nrow(df_filt))
+  message("Example gene IDs: ", paste(head(df_filt$gene, 10), collapse = " | "))
+
+  df_filt
+}
+```
+
+## 4. Combine all filtered datasets
+
+Apply the filtering function to every detected CSV file, combine the results, and print a simple global check.
+
+```{r}
+# 4. Read all files -----------------------------------------------
+
+dge_list <- lapply(
+  dge_files,
+  read_and_filter_dge,
+  padj_threshold = padj_threshold,
+  log2fc_threshold = log2fc_threshold
+)
+
+dge_all <- bind_rows(dge_list)
+
+if (nrow(dge_all) == 0) {
+  stop("No significant gene after filtering across all files.")
+}
+
+message("=== CHECK GLOBAL ===")
+message("Total retained rows: ", nrow(dge_all))
+message("Total unique genes: ", dplyr::n_distinct(dge_all$gene))
+```
+
+## 5. Utility functions
+
+These functions prepare gene sets, presence matrices, export tables, exact intersections and the final UpSet plots. **For routine use, this section normally does not need editing.**
+
+```{r}
+# 5. Utilities ----------------------------------------------------------
+
+make_sets <- function(df, grouping_col) {
+  grouping_col <- rlang::ensym(grouping_col)
+  group_name <- rlang::as_string(grouping_col)
+
+  tmp <- df %>%
+    group_by(!!grouping_col) %>%
+    summarise(genes = list(sort(unique(gene))), .groups = "drop")
+
+  out <- tmp$genes
+  names(out) <- tmp[[group_name]]
+  out
+}
+
+make_presence_df <- function(sets_list) {
+  if (length(sets_list) == 0) {
+    return(data.frame())
+  }
+
+  all_genes <- sort(unique(unlist(sets_list)))
+
+  if (length(all_genes) == 0) {
+    return(data.frame())
+  }
+
+  mat <- sapply(sets_list, function(gset) as.integer(all_genes %in% gset))
+
+  if (is.null(dim(mat))) {
+    mat <- matrix(mat, ncol = 1)
+    colnames(mat) <- names(sets_list)
+  }
+
+  mat_df <- data.frame(
+    gene = all_genes,
+    mat,
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+
+  mat_df
+}
+
+write_long_gene_table <- function(df, file) {
+  out <- df %>%
+    arrange(sample, direction, desc(log2FoldChange), gene) %>%
+    select(sample, direction, group, gene, log2FoldChange, padj)
+
+  write.csv(out, file = file, row.names = FALSE)
+}
+
+write_wide_padded_table <- function(df, grouping_col, file) {
+  grouping_col <- rlang::ensym(grouping_col)
+
+  group_values <- df %>%
+    distinct(!!grouping_col) %>%
+    pull(!!grouping_col)
+
+  tables_list <- vector("list", length(group_values))
+  names(tables_list) <- group_values
+
+  for (g in group_values) {
+    df_g <- df %>%
+      filter((!!grouping_col) == g) %>%
+      arrange(desc(log2FoldChange), gene) %>%
+      select(gene, log2FoldChange, padj) %>%
+      distinct(gene, .keep_all = TRUE)
+
+    tables_list[[g]] <- df_g
+  }
+
+  if (length(tables_list) == 0) {
+    write.csv(data.frame(), file = file, row.names = FALSE)
+    return(invisible(NULL))
+  }
+
+  max_len <- max(vapply(tables_list, nrow, integer(1)))
+
+  padded_tables <- lapply(names(tables_list), function(g) {
+    df_g <- tables_list[[g]]
+    n <- nrow(df_g)
+
+    if (n < max_len) {
+      df_g <- rbind(
+        df_g,
+        data.frame(
+          gene = rep(NA_character_, max_len - n),
+          log2FoldChange = rep(NA_real_, max_len - n),
+          padj = rep(NA_real_, max_len - n)
+        )
+      )
+    }
+
+    colnames(df_g) <- c(
+      paste0(g, "_gene"),
+      paste0(g, "_log2FoldChange"),
+      paste0(g, "_padj")
+    )
+
+    df_g
+  })
+
+  wide_table <- do.call(cbind, padded_tables)
+  write.csv(wide_table, file = file, row.names = FALSE)
+}
+
+write_exact_intersections <- function(presence_df, file_prefix) {
+  if (nrow(presence_df) == 0 || ncol(presence_df) <= 1) {
+    write.csv(
+      data.frame(),
+      paste0(file_prefix, "_exact_intersections_summary.csv"),
+      row.names = FALSE
+    )
+    write.csv(
+      data.frame(),
+      paste0(file_prefix, "_exact_intersections_genes.csv"),
+      row.names = FALSE
+    )
+    return(invisible(NULL))
+  }
+
+  membership_df <- presence_df
+  rownames(membership_df) <- membership_df$gene
+  membership_df$gene <- NULL
+
+  exact_labels <- apply(membership_df, 1, function(x) {
+    present <- names(x)[x == 1]
+    if (length(present) == 0) return(NA_character_)
+    paste(sort(present), collapse = " & ")
+  })
+
+  genes_df <- data.frame(
+    gene = rownames(membership_df),
+    exact_intersection = exact_labels,
+    stringsAsFactors = FALSE
+  ) %>%
+    filter(!is.na(exact_intersection)) %>%
+    arrange(exact_intersection, gene)
+
+  summary_df <- genes_df %>%
+    count(exact_intersection, name = "n_genes") %>%
+    arrange(desc(n_genes), exact_intersection)
+
+  write.csv(
+    summary_df,
+    paste0(file_prefix, "_exact_intersections_summary.csv"),
+    row.names = FALSE
+  )
+
+  write.csv(
+    genes_df,
+    paste0(file_prefix, "_exact_intersections_genes.csv"),
+    row.names = FALSE
+  )
+}
+
+make_upset_plot <- function(presence_df,
+                            sets_vector,
+                            title_text,
+                            ylab_text,
+                            max_intersections = 50,
+                            base_size = 11) {
+
+  if (nrow(presence_df) == 0) {
+    stop("presence_df is empty.")
+  }
+
+  transparent_stripe <- grDevices::adjustcolor("white", alpha.f = 0)
+
+  ComplexUpset::upset(
+    presence_df,
+    intersect = sets_vector,
+    min_size = 1,
+    n_intersections = max_intersections,
+    width_ratio = 0.10,
+    height_ratio = 0.70,
+    stripes = ComplexUpset::upset_stripes(
+      colors = c(transparent_stripe, transparent_stripe)
+    ),
+    name = "Intersection size",
+
+    matrix = ComplexUpset::intersection_matrix() +
+      ggplot2::theme(
+        panel.border = ggplot2::element_rect(
+          fill = NA,
+          colour = "black",
+          linewidth = 0.6
+        ),
+        panel.background = ggplot2::element_rect(
+          fill = "white",
+          colour = NA
+        ),
+        plot.background = ggplot2::element_rect(
+          fill = "white",
+          colour = NA
+        )
+      ),
+
+    base_annotations = list(
+      "Intersection size" = intersection_size(
+        text = list(
+          angle = 45,
+          hjust = 0,
+          vjust = -0.2,
+          colour = "black",
+          fontface = "bold",
+          size = 4.5
+        ),
+        bar_number_threshold = 0,
+        fill = "grey80",
+        colour = NA
+      )
+    ),
+
+    set_sizes = upset_set_size(
+      geom = ggplot2::geom_bar(
+        width = 0.35,
+        fill = "grey80",
+        colour = NA
+      )
+    ),
+
+    themes = ComplexUpset::upset_modify_themes(list(
+      "default" = ggplot2::theme(
+        panel.background = ggplot2::element_rect(fill = "white", colour = NA),
+        plot.background = ggplot2::element_rect(fill = "white", colour = NA),
+        strip.background = ggplot2::element_rect(fill = "white", colour = "black", linewidth = 0.6)
+      ),
+      "intersections_matrix" = ggplot2::theme(
+        axis.text.x = ggplot2::element_blank(),
+        axis.ticks.x = ggplot2::element_blank(),
+        panel.background = ggplot2::element_rect(fill = "white", colour = NA),
+        plot.background = ggplot2::element_rect(fill = "white", colour = NA),
+        panel.border = ggplot2::element_blank(),
+        panel.grid.major = ggplot2::element_blank(),
+        panel.grid.minor = ggplot2::element_blank(),
+        strip.background = ggplot2::element_rect(fill = "white", colour = "black", linewidth = 0.6)
+      ),
+      "Intersection size" = ggplot2::theme(
+        axis.text.x = ggplot2::element_blank(),
+        axis.ticks.x = ggplot2::element_blank(),
+        panel.background = ggplot2::element_rect(fill = "white", colour = NA),
+        plot.background = ggplot2::element_rect(fill = "white", colour = NA),
+        panel.border = ggplot2::element_blank(),
+        panel.grid.major = ggplot2::element_blank(),
+        panel.grid.minor = ggplot2::element_blank(),
+        strip.background = ggplot2::element_rect(fill = "white", colour = "black", linewidth = 0.6),
+        strip.text = ggplot2::element_text(
+          face = "bold",
+          colour = "black",
+          size = ggplot2::rel(1.75)
+        )
+      ),
+      "overall_sizes" = ggplot2::theme(
+        axis.text.x = ggplot2::element_text(
+          angle = 45,
+          hjust = 1,
+          vjust = 1,
+          face = "bold",
+          colour = "black",
+          size = ggplot2::rel(1.5)
+        ),
+        panel.background = ggplot2::element_rect(fill = "white", colour = NA),
+        plot.background = ggplot2::element_rect(fill = "white", colour = NA),
+        panel.border = ggplot2::element_blank(),
+        panel.grid.major.x = ggplot2::element_line(colour = "grey80", linewidth = 0.3),
+        panel.grid.major.y = ggplot2::element_blank(),
+        panel.grid.minor.x = ggplot2::element_blank(),
+        panel.grid.minor.y = ggplot2::element_blank(),
+        strip.background = ggplot2::element_rect(fill = "white", colour = "black", linewidth = 0.6)
+      )
+    ))
+  ) +
+    ggplot2::labs(
+      title = title_text,
+      x = NULL,
+      y = ylab_text
+    ) +
+    ggplot2::coord_cartesian(clip = "off") +
+    ggplot2::theme_bw(base_size = base_size) +
+    ggplot2::theme(
+      text = ggplot2::element_text(colour = "black", face = "bold"),
+      plot.title = ggplot2::element_text(
+        face = "bold",
+        colour = "black",
+        size = ggplot2::rel(1.75)
+      ),
+      axis.title = ggplot2::element_text(face = "bold", colour = "black"),
+      axis.text = ggplot2::element_text(face = "bold", colour = "black"),
+      axis.text.x = ggplot2::element_blank(),
+      axis.ticks.x = ggplot2::element_blank(),
+      axis.text.y = ggplot2::element_text(face = "bold", colour = "black"),
+      strip.text = ggplot2::element_text(face = "bold", colour = "black"),
+      strip.background = ggplot2::element_rect(fill = "white", colour = "black", linewidth = 0.6),
+      legend.title = ggplot2::element_text(face = "bold", colour = "black"),
+      legend.text = ggplot2::element_text(face = "bold", colour = "black"),
+      panel.background = ggplot2::element_rect(fill = "white", colour = NA),
+      plot.background = ggplot2::element_rect(fill = "white", colour = NA),
+      panel.border = ggplot2::element_blank(),
+      panel.grid.minor = ggplot2::element_blank(),
+      panel.grid.major = ggplot2::element_blank(),
+      plot.margin = ggplot2::margin(t = 10, r = 40, b = 10, l = 10)
+    )
+}
+```
+
+## 6. Build the comparison groups
+
+Create four views of the same filtered DGE results: **upregulated**, **downregulated**, **up/down kept separate**, and **all significant genes merged by dataset**.
+
+```{r}
+# 6. Build groups ------------------------------------------------
+
+up_sets <- dge_all %>%
+  filter(direction == "up") %>%
+  make_sets(sample)
+
+down_sets <- dge_all %>%
+  filter(direction == "down") %>%
+  make_sets(sample)
+
+mixed_sets <- dge_all %>%
+  make_sets(group)
+
+all_sets <- dge_all %>%
+  make_sets(sample)
+
+up_sets <- up_sets[lengths(up_sets) > 0]
+down_sets <- down_sets[lengths(down_sets) > 0]
+mixed_sets <- mixed_sets[lengths(mixed_sets) > 0]
+all_sets <- all_sets[lengths(all_sets) > 0]
+
+message("=== CHECK SETS ===")
+message("Number of UP groups: ", length(up_sets))
+message("Number of DOWN groups: ", length(down_sets))
+message("Number of MIXED groups: ", length(mixed_sets))
+message("Number of ALL groups: ", length(all_sets))
+
+if (length(up_sets) > 0) {
+  message("UP sizes: ", paste(names(up_sets), lengths(up_sets), sep = "=", collapse = " | "))
+}
+if (length(down_sets) > 0) {
+  message("DOWN sizes: ", paste(names(down_sets), lengths(down_sets), sep = "=", collapse = " | "))
+}
+if (length(mixed_sets) > 0) {
+  message("MIXED sizes: ", paste(names(mixed_sets), lengths(mixed_sets), sep = "=", collapse = " | "))
+}
+if (length(all_sets) > 0) {
+  message("ALL sizes: ", paste(names(all_sets), lengths(all_sets), sep = "=", collapse = " | "))
+}
+```
+
+## 7. Export tables
+
+Write the filtered genes, presence matrices, exact intersections and group summaries to CSV files for inspection or downstream analysis.
+
+```{r}
+# 7. Tables ----------------------------------------------------------------
+
+dge_up <- dge_all %>% filter(direction == "up")
+dge_down <- dge_all %>% filter(direction == "down")
+
+write.csv(
+  dge_all %>%
+    arrange(sample, direction, desc(log2FoldChange), gene) %>%
+    select(sample, direction, group, gene, log2FoldChange, padj),
+  file = "DGE_all_significant_genes_long.csv",
+  row.names = FALSE
+)
+
+write_long_gene_table(dge_up, "Upregulated_genes_long.csv")
+write_long_gene_table(dge_down, "Downregulated_genes_long.csv")
+write_long_gene_table(dge_all, "Mixed_groups_genes_long.csv")
+write_long_gene_table(dge_all, "All_significant_genes_long.csv")
+
+write_wide_padded_table(dge_up, sample, "Upregulated_genes_by_dataset_wide.csv")
+write_wide_padded_table(dge_down, sample, "Downregulated_genes_by_dataset_wide.csv")
+write_wide_padded_table(dge_all, group, "Mixed_groups_genes_by_group_wide.csv")
+write_wide_padded_table(dge_all, sample, "All_significant_genes_by_dataset_wide.csv")
+
+up_presence <- make_presence_df(up_sets)
+down_presence <- make_presence_df(down_sets)
+mixed_presence <- make_presence_df(mixed_sets)
+all_presence <- make_presence_df(all_sets)
+
+write.csv(up_presence, "Upregulated_presence_matrix.csv", row.names = FALSE)
+write.csv(down_presence, "Downregulated_presence_matrix.csv", row.names = FALSE)
+write.csv(mixed_presence, "Mixed_groups_presence_matrix.csv", row.names = FALSE)
+write.csv(all_presence, "All_significant_presence_matrix.csv", row.names = FALSE)
+
+write_exact_intersections(up_presence, "Upregulated")
+write_exact_intersections(down_presence, "Downregulated")
+write_exact_intersections(mixed_presence, "Mixed_groups")
+write_exact_intersections(all_presence, "All_significant")
+
+summary_table <- bind_rows(
+  tibble(group_type = "up_only", group = names(up_sets), n_genes = lengths(up_sets)),
+  tibble(group_type = "down_only", group = names(down_sets), n_genes = lengths(down_sets)),
+  tibble(group_type = "mixed", group = names(mixed_sets), n_genes = lengths(mixed_sets)),
+  tibble(group_type = "all_significant", group = names(all_sets), n_genes = lengths(all_sets))
+)
+
+write.csv(summary_table, "UpSet_groups_summary.csv", row.names = FALSE)
+```
+
+## 8. Generate UpSet PDF figures
+
+Generate the four UpSet plot families. Plot width is adjusted automatically to the number of sets, while `pdf_height` controls the height.
+
+```{r}
+# 8. PDF figures -----------------------------------------------------------
+
+if (nrow(up_presence) > 0 && length(up_sets) > 0) {
+  p_up <- make_upset_plot(
+    presence_df = up_presence,
+    sets_vector = names(up_sets),
+    title_text = "Upregulated genes",
+    ylab_text = "Genes per dataset",
+    max_intersections = max_intersections
+  )
+
+  ggplot2::ggsave(
+    filename = "UpSet_upregulated.pdf",
+    plot = p_up,
+    width = max(14, 1.5 * length(up_sets)),
+    height = pdf_height,
+    device = grDevices::cairo_pdf,
+    limitsize = FALSE
+  )
+  message("PDF generated: UpSet_upregulated.pdf")
+}
+
+if (nrow(down_presence) > 0 && length(down_sets) > 0) {
+  p_down <- make_upset_plot(
+    presence_df = down_presence,
+    sets_vector = names(down_sets),
+    title_text = "Downregulated genes",
+    ylab_text = "Genes per dataset",
+    max_intersections = max_intersections
+  )
+
+  ggplot2::ggsave(
+    filename = "UpSet_downregulated.pdf",
+    plot = p_down,
+    width = max(14, 1.5 * length(down_sets)),
+    height = pdf_height,
+    device = grDevices::cairo_pdf,
+    limitsize = FALSE
+  )
+  message("PDF generated: UpSet_downregulated.pdf")
+}
+
+if (nrow(mixed_presence) > 0 && length(mixed_sets) > 0) {
+  p_mixed <- make_upset_plot(
+    presence_df = mixed_presence,
+    sets_vector = names(mixed_sets),
+    title_text = "All groups (Up/Down separated)",
+    ylab_text = "Genes per group",
+    max_intersections = max_intersections,
+    base_size = 10
+  )
+
+  ggplot2::ggsave(
+    filename = "UpSet_all_groups_mixed.pdf",
+    plot = p_mixed,
+    width = max(18, 1.35 * length(mixed_sets)),
+    height = pdf_height,
+    device = grDevices::cairo_pdf,
+    limitsize = FALSE
+  )
+  message("PDF generated: UpSet_all_groups_mixed.pdf")
+}
+
+if (nrow(all_presence) > 0 && length(all_sets) > 0) {
+  p_all <- make_upset_plot(
+    presence_df = all_presence,
+    sets_vector = names(all_sets),
+    title_text = "All significant genes (Up/Down merged)",
+    ylab_text = "Genes per dataset",
+    max_intersections = max_intersections
+  )
+
+  ggplot2::ggsave(
+    filename = "UpSet_all_significant_merged.pdf",
+    plot = p_all,
+    width = max(14, 1.5 * length(all_sets)),
+    height = pdf_height,
+    device = grDevices::cairo_pdf,
+    limitsize = FALSE
+  )
+  message("PDF generated: UpSet_all_significant_merged.pdf")
+}
+
+message("Completed.")
+```
