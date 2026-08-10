@@ -2,29 +2,29 @@
 #
 # TRANSCRIPTOMICS PIPELINE — Haemonchus contortus RNA-seq
 #
-# This script consolidates the supplied draft pipeline (main.sh + 01_fastqc.sh,
-# 02_multiqc.sh, 03_cutadapt.sh, 04_hisat2.sh, 05_MarkDuplicates.sh,
-# 05_quality.sh and 11_featureCounts.sh/R) into one LSF orchestrator.
+# End-to-end LSF pipeline for raw-read acquisition, quality control, adapter
+# trimming, reference alignment, duplicate marking, mapping quality control and
+# generation of the raw gene-count matrix.
 #
 # SCOPE
 # - raw paired-end FASTQ acquisition from transcriptomics.csv.manifest
 # - FastQC 0.12.1
-# - MultiQC 1.14 (version retained from the supplied draft)
-# - Cutadapt 4.3 with the supplied Illumina adapter sequences and otherwise
-#   default trimming settings
+# - MultiQC 1.14
+# - Cutadapt 4.3 with Illumina adapter sequences and otherwise default trimming
+#   settings
 # - HISAT2 2.2.1 mapping to H. contortus PRJEB506 / WBPS18
 # - SAM -> BAM conversion, coordinate sorting and indexing with SAMtools 1.19
 # - duplicate marking with Sambamba 1.0.1
 # - mapping QC with SAMtools 1.19 flagstat and stats
 # - paired-end gene counting with featureCounts from Rsubread 2.16.1
 #
-# IMPORTANT METHOD BOUNDARY
-# The supplied draft ends at featureCounts. The later article Methods sections
-# (DESeq2 normalisation, sample concordance, BUN-M3 exclusion, DGE and enrichment)
-# are therefore not invented here without their original analysis scripts.
-# In particular, Hc_T_R_BUN_M_3 is retained through the raw-count table and is
-# only to be excluded at the downstream differential-expression stage, exactly
-# as described in the Methods.
+# ANALYSIS BOUNDARY
+# This pipeline processes each sample from raw paired-end reads through to the
+# featureCounts raw gene-count table. Downstream normalisation, sample
+# concordance assessment, differential-expression analysis and gene-set
+# enrichment are performed separately. Hc_T_R_BUN_M_3 is therefore retained in
+# the raw count table and excluded only at the downstream differential-expression
+# stage, in accordance with the analysis Methods.
 #
 # PREREQUISITES
 # - HPC cluster using LSF: bsub, bwait and bjobs available
@@ -39,8 +39,7 @@
 # ID,R1,R2
 # Hc_T_R_ARA_F_1,ftp.sra.ebi.ac.uk/..._1.fastq.gz,ftp.sra.ebi.ac.uk/..._2.fastq.gz
 #
-# URLs without an explicit scheme are interpreted as ftp:// URLs. This matches
-# the supplied transcriptomics.csv.manifest.
+# URLs without an explicit scheme are interpreted as ftp:// URLs.
 #
 # EXECUTION PRINCIPLE
 # - each stage is created as <stage>.tmp.XXXXXX;
@@ -232,7 +231,7 @@ gtf_base="$(basename "${ANNOTATION}")"
 
 mkdir -p "${TOOLDIR}"
 
-# Exact, immutable BioContainers used by the supplied Methods/draft versions.
+# Version-pinned BioContainers used throughout the analysis.
 FASTQC_SIF="${TOOLDIR}/fastqc_0.12.1.sif"
 MULTIQC_SIF="${TOOLDIR}/multiqc_1.14.sif"
 CUTADAPT_SIF="${TOOLDIR}/cutadapt_4.3.sif"
@@ -427,8 +426,8 @@ fi
 
 # ==============================================================================
 # 03_cutadapt — paired-end adapter trimming with Cutadapt 4.3
-# Supplied adapter sequences are retained; all other trimming behaviour is left
-# at Cutadapt defaults, matching the Methods wording and the draft script.
+# Illumina adapter sequences are specified explicitly; all other trimming
+# behaviour is left at the Cutadapt defaults.
 # ==============================================================================
 if begin_stage "03_cutadapt"; then
     echo "Creating and running 03_cutadapt"
@@ -498,9 +497,9 @@ rmdir "${tmpdir}"
 fi
 
 # ==============================================================================
-# 04_hisat2 — HISAT2 2.2.1 index + mapping; SAM -> sorted/indexed BAM with
-# SAMtools 1.19. The draft read-group intent is retained using valid HISAT2
-# syntax: --rg-id is required for the @RG line, with SM/LB/PL supplied via --rg.
+# 04_hisat2 — HISAT2 2.2.1 index and mapping; SAM -> sorted/indexed BAM with
+# SAMtools 1.19. Read-group metadata are written using --rg-id for the @RG ID
+# field and --rg for the SM, LB and PL fields.
 # ==============================================================================
 if begin_stage "04_hisat2"; then
     echo "Creating and running 04_hisat2"
@@ -732,10 +731,9 @@ fi
 
 # ==============================================================================
 # 05_quality — mapping QC with SAMtools 1.19 flagstat and stats
-# The raw SAMtools reports are the canonical QC outputs required by the Methods.
-# A conservative CSV summary is also produced; it avoids inferring a
-# "uniquely-mapped" count from flagstat secondary-alignments, which the draft
-# did not actually measure.
+# The complete SAMtools reports are retained as the primary mapping-QC outputs.
+# A concise CSV summary is also generated from directly reported or
+# unambiguously derived alignment metrics.
 # ==============================================================================
 if begin_stage "05_quality"; then
     echo "Creating and running 05_quality"
@@ -837,8 +835,8 @@ fi
 
 # ==============================================================================
 # 11_featureCounts — paired-end gene counts with Rsubread 2.16.1
-# This is the supplied draft endpoint. Sample columns are explicitly renamed
-# from the manifest IDs, replacing the draft's fragile path-prefix/suffix logic.
+# Sample columns are assigned directly from manifest IDs to preserve sample
+# identity consistently throughout the count matrix.
 # ==============================================================================
 if begin_stage "11_featureCounts"; then
     echo "Creating and running 11_featureCounts"
