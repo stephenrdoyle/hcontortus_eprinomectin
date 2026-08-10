@@ -18,7 +18,7 @@ The second bloc is about transcriptomics.
 
 transcriptomics.sh is the analysis pipeline per-sample
 
-MuGeCoExDeAn is the R tool created to generae DGE data and explore them
+MuGeCoExDeAn is the R tool created to generae DGE data and explore them, use -h to see options
 
 Upset plot on DGE data
 
