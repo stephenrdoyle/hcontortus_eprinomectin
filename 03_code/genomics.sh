@@ -1,305 +1,344 @@
-#!/usr/bin/env bash
-#
-# PREREQUISITES
-# - you are on an HPC cluster
-# - your job scheduler is LSF (bsub)
-# - Singularity module is loaded
-# - the following module is installed and available by module load : nextflow
-# - the following module is installed and available by module load : mapping-helminth/v1.0.8
-# - in the current path, you created a folder 0_refseq, in which you donwloaded refseq files .fa (reference genome) and .gtf (gene annotation)
-# - the .manifest file is present in the current launch directory, and looks like :
-#   ID,R1,R2
-#   sample_1,ftp://.../sample_1_R1.fastq.gz,ftp://.../sample_1_R2.fastq.gz
-#
-# EXECUTION PRINCIPLE
-# - if an analysis-stage directory is absent, a temporary stage directory is created and launched,
-# - the temporary stage directory is renamed to the final stage directory only after successful completion,
-# - if the run fails, manually remove the remaining temporary stage directory and rerun,
-# - each output is first written to a .tmp.XXXXXX path and is renamed only after successful completion, so remaining .tmp.XXXXXX files or directories mean that the stage is corrupted.
-#
-# WARNING
-# Launch this pipeline using bsub on a long queue to avoid any interruption before it’s terminated.
-# Command example : bsub -q long -J genomics -n 1 -R "select[mem>=2000] rusage[mem=2000] span[hosts=1]" -M 2000 -o "genomics.out" -e "genomics.err" bash genomics.sh
+# Whole-genome sequencing analysis pipeline
 
-set -euo pipefail
-IFS=$'\n\t'
+This repository describes the whole-genome sequencing workflow used to process paired-end sequencing data, perform read mapping and variant calling, annotate genomic variants, and estimate pairwise genetic differentiation between pooled samples.
 
+The workflow was developed for *Haemonchus contortus* using the PRJEB506 WBPS18 reference genome and annotation.
+
+## Workflow overview
+
+```text
+Paired-end FASTQ
+       │
+       ▼
+0. Read acquisition
+       │
+       ▼
+1. Raw-read quality control
+   FastQC → MultiQC
+       │
+       ▼
+2. Read mapping
+   mapping-helminth
+       │
+       ├── BAM files
+       └── mapping QC → MultiQC
+       │
+       ▼
+3. Variant analysis
+   MAPQ filtering
+       ↓
+   bcftools mpileup
+       ↓
+   bcftools call
+       ↓
+   multiallelic splitting / normalisation
+       ↓
+   SnpEff annotation
+       ↓
+   multisample VCF
+       │
+       ▼
+4. Population differentiation
+   Grenedalf FST
+   5-kb windows / 2.5-kb step
+```
+
+## Software
+
+| Software         | Version | Main purpose                      |
+| ---------------- | ------: | --------------------------------- |
+| FastQC           |  0.12.1 | Raw-read quality control          |
+| MultiQC          |    1.17 | QC report aggregation             |
+| mapping-helminth |   1.0.8 | Read mapping and BAM processing   |
+| SAMtools         |    1.22 | BAM filtering and indexing        |
+| BCFtools         |    1.23 | Variant calling and normalisation |
+| SnpEff           |    5.1d | Functional variant annotation     |
+| Grenedalf        |   0.6.3 | Pool-seq genetic differentiation  |
+
+Containerised tools are run with **Singularity**. The `mapping-helminth` workflow is provided as an HPC module and uses Nextflow internally.
+
+---
+
+# Repository structure
+
+```text
+.
+├── samples.manifest
+├── 0_refseq/
+│   ├── reference.fa
+│   └── annotation.gtf
+│
+├── 0_tools/
+│
+├── 0_samples/
+│
+├── 1_QC/
+│   ├── fastqc/
+│   └── multiqc/
+│
+├── 2_mapping/
+│   ├── outputs/
+│   ├── multiqc/
+│   └── work/
+│
+├── 3_variants/
+│   ├── filtered_bam/
+│   ├── per_sample/
+│   └── merged/
+│
+└── 4_FST/
+    └── windows_5kb/
+```
+
+The examples below assume that commands are launched from the **repository root**.
+
+---
+
+# Input data
+
+## Sample manifest
+
+Samples are described in a comma-separated manifest:
+
+```text
+ID,R1,R2
+sample_1,ftp://server/sample_1_R1.fastq.gz,ftp://server/sample_1_R2.fastq.gz
+sample_2,ftp://server/sample_2_R1.fastq.gz,ftp://server/sample_2_R2.fastq.gz
+```
+
+The sample identifier in the `ID` column is used throughout the analysis.
+
+## Reference files
+
+Place the genome and gene annotation in:
+
+```text
+0_refseq/
+```
+
+with one FASTA genome:
+
+```text
+0_refseq/reference.fa
+```
+
+and one GTF annotation:
+
+```text
+0_refseq/annotation.gtf
+```
+
+For the analysis described here, both files correspond to the same *H. contortus* PRJEB506 WBPS18 assembly.
+
+---
+
+# 0 — Acquire sequencing reads
+
+**Input**
+
+```text
+samples.manifest
+```
+
+**Output**
+
+```text
+0_samples/<ID>/<ID>_R1.fastq.gz
+0_samples/<ID>/<ID>_R2.fastq.gz
+```
+
+FASTQ files are downloaded using `wget -c`, allowing interrupted transfers to be resumed.
+
+```bash
 ROOT="$(pwd -P)"
 MANIFEST="$(find "${ROOT}" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
-REFERENCE="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.fa' -print -quit)"
-ANNOTATION="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.gtf' -print -quit)"
 
-# Wait for an LSF job and stop the pipeline if the job did not finish
-# successfully. After bwait reports that the job has ended, wait until
-# bjobs exposes its final DONE or EXIT status.
-wait_for_job() {
-    local jid="$1"
-    local status
+mkdir -p "${ROOT}/0_samples"
 
-    if [[ ! "${jid}" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: invalid or missing LSF job ID: '${jid}'." >&2
-        exit 1
-    fi
+while IFS=, read -r id r1 r2; do
 
-    bwait -w "ended(${jid})"
+    id="${id//$'\r'/}"
+    r1="${r1//$'\r'/}"
+    r2="${r2//$'\r'/}"
 
-    while true; do
-        status="$(
-            bjobs -a -noheader -o "stat" "${jid}" 2>/dev/null \
-            | awk 'NF {print $1; exit}' \
-            || true
-        )"
+    [[ "${id}" == "ID" || -z "${id}" ]] && continue
 
-        case "${status}" in
-            DONE)
-                return 0
-                ;;
-            EXIT)
-                echo "ERROR: LSF job ${jid} ended with status EXIT." >&2
-                echo "Pipeline stopped. Remove the failed temporary stage directory before rerunning." >&2
-                exit 1
-                ;;
-            *)
-                sleep 2
-                ;;
-        esac
-    done
-}
+    mkdir -p "${ROOT}/0_samples/${id}"
 
-# ==============================================================================
-# 0_samples — sequential acquisition of paired-end FASTQ files with wget -c
-# ==============================================================================
-if [[ ! -d "${ROOT}/0_samples" ]]; then
-    echo "Creating and running 0_samples"
+    wget -c \
+        -O "${ROOT}/0_samples/${id}/${id}_R1.fastq.gz" \
+        "${r1}"
 
-    STAGE="$(mktemp -d "${ROOT}/0_samples.tmp.XXXXXX")"
+    wget -c \
+        -O "${ROOT}/0_samples/${id}/${id}_R2.fastq.gz" \
+        "${r2}"
 
-    while IFS=, read -r id r1 r2; do
-        id="${id//$'\r'/}"
-        r1="${r1//$'\r'/}"
-        r2="${r2//$'\r'/}"
-        [[ "${id}" == "ID" || -z "${id}" ]] && continue
+done < "${MANIFEST}"
+```
 
-        mkdir -p "${STAGE}/${id}"
+---
 
-        submission="$(
-            ROOT="${ROOT}" STAGE="${STAGE}" ID="${id}" URL_R1="${r1}" URL_R2="${r2}" \
-            bsub \
-                -J "DL_${id}" \
-                -n 1 \
-                -R "select[mem>=2000] rusage[mem=2000] span[hosts=1]" \
-                -M 2000 \
-                -o "${STAGE}/${id}/DL_${id}.%J.out" \
-                -e "${STAGE}/${id}/DL_${id}.%J.err" \
-                bash -lc '
-set -euo pipefail
+# 1 — Raw-read quality control
 
-final_r1="${STAGE}/${ID}/${ID}_R1.fastq.gz"
-tmp_r1="$(find "${STAGE}/${ID}" -maxdepth 1 -type f -name ".${ID}_R1.fastq.gz.tmp.*" -print -quit)"
-if [[ -z "${tmp_r1}" ]]; then
-    tmp_r1="$(mktemp "${STAGE}/${ID}/.${ID}_R1.fastq.gz.tmp.XXXXXX")"
-fi
-wget -c -O "${tmp_r1}" "${URL_R1}"
-mv "${tmp_r1}" "${final_r1}"
+Raw paired-end reads are assessed independently with **FastQC 0.12.1** and summarised across samples with **MultiQC 1.17**.
 
-final_r2="${STAGE}/${ID}/${ID}_R2.fastq.gz"
-tmp_r2="$(find "${STAGE}/${ID}" -maxdepth 1 -type f -name ".${ID}_R2.fastq.gz.tmp.*" -print -quit)"
-if [[ -z "${tmp_r2}" ]]; then
-    tmp_r2="$(mktemp "${STAGE}/${ID}/.${ID}_R2.fastq.gz.tmp.XXXXXX")"
-fi
-wget -c -O "${tmp_r2}" "${URL_R2}"
-mv "${tmp_r2}" "${final_r2}"
-'
-        )"
+## 1.1 Download the containers
 
-        echo "${submission}"
-        jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-        wait_for_job "${jid}"
-    done < "${MANIFEST}"
+```bash
+ROOT="$(pwd -P)"
 
-    mv "${STAGE}" "${ROOT}/0_samples"
-fi
+mkdir -p "${ROOT}/0_tools"
 
+wget -c \
+    -O "${ROOT}/0_tools/fastqc_0.12.1.sif" \
+    "https://depot.galaxyproject.org/singularity/fastqc%3A0.12.1--hdfd78af_0"
 
-# ==============================================================================
-# 1_QC — parallel FastQC assessment followed by MultiQC summarisation
-# ==============================================================================
-if [[ ! -d "${ROOT}/1_QC" ]]; then
-    echo "Creating and running 1_QC"
+wget -c \
+    -O "${ROOT}/0_tools/multiqc_1.17.sif" \
+    "https://depot.galaxyproject.org/singularity/multiqc%3A1.17--pyhdfd78af_1"
+```
 
-    STAGE="$(mktemp -d "${ROOT}/1_QC.tmp.XXXXXX")"
+These downloads only need to be performed once.
 
-    mkdir -p "${ROOT}/0_tools"
+## 1.2 Run FastQC
 
-    if [[ ! -f "${ROOT}/0_tools/fastqc_0.12.1.sif" ]]; then
-        fastqc_tmp="$(find "${ROOT}/0_tools" -maxdepth 1 -type f -name '.fastqc_0.12.1.sif.tmp.*' -print -quit)"
-        if [[ -z "${fastqc_tmp}" ]]; then
-            fastqc_tmp="$(mktemp "${ROOT}/0_tools/.fastqc_0.12.1.sif.tmp.XXXXXX")"
-        fi
-        wget -c \
-            -O "${fastqc_tmp}" \
-            "https://depot.galaxyproject.org/singularity/fastqc%3A0.12.1--hdfd78af_0"
-        mv "${fastqc_tmp}" "${ROOT}/0_tools/fastqc_0.12.1.sif"
-    fi
+**Input**
 
-    if [[ ! -f "${ROOT}/0_tools/multiqc_1.17.sif" ]]; then
-        multiqc_tmp="$(find "${ROOT}/0_tools" -maxdepth 1 -type f -name '.multiqc_1.17.sif.tmp.*' -print -quit)"
-        if [[ -z "${multiqc_tmp}" ]]; then
-            multiqc_tmp="$(mktemp "${ROOT}/0_tools/.multiqc_1.17.sif.tmp.XXXXXX")"
-        fi
-        wget -c \
-            -O "${multiqc_tmp}" \
-            "https://depot.galaxyproject.org/singularity/multiqc%3A1.17--pyhdfd78af_1"
-        mv "${multiqc_tmp}" "${ROOT}/0_tools/multiqc_1.17.sif"
-    fi
+```text
+0_samples/<ID>/<ID>_R1.fastq.gz
+0_samples/<ID>/<ID>_R2.fastq.gz
+```
 
-    mkdir -p "${STAGE}/fastqc"
-    jobs=()
+**Output**
 
-    while IFS=, read -r id r1 r2; do
-        id="${id//$'\r'/}"
-        [[ "${id}" == "ID" || -z "${id}" ]] && continue
+```text
+1_QC/fastqc/<ID>/
+```
 
-        submission="$(
-            ROOT="${ROOT}" STAGE="${STAGE}" ID="${id}" \
-            bsub \
-                -J "QC_${id}" \
-                -n 4 \
-                -R "select[mem>=4000] rusage[mem=4000] span[hosts=1]" \
-                -M 4000 \
-                -o "${STAGE}/fastqc/QC_${id}.%J.out" \
-                -e "${STAGE}/fastqc/QC_${id}.%J.err" \
-                bash -lc '
-set -euo pipefail
+```bash
+ROOT="$(pwd -P)"
+MANIFEST="$(find "${ROOT}" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
 
-tmpdir="$(mktemp -d "${STAGE}/fastqc/.${ID}.tmp.XXXXXX")"
+mkdir -p "${ROOT}/1_QC/fastqc"
 
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/fastqc_0.12.1.sif" \
-    fastqc \
-    --threads 4 \
-    --outdir "${tmpdir}" \
-    "${ROOT}/0_samples/${ID}/${ID}_R1.fastq.gz" \
-    "${ROOT}/0_samples/${ID}/${ID}_R2.fastq.gz"
+while IFS=, read -r id r1 r2; do
 
-mv "${tmpdir}" "${STAGE}/fastqc/${ID}"
-'
-        )"
+    id="${id//$'\r'/}"
+    [[ "${id}" == "ID" || -z "${id}" ]] && continue
 
-        echo "${submission}"
-        jobs+=("$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")")
-    done < "${MANIFEST}"
+    mkdir -p "${ROOT}/1_QC/fastqc/${id}"
 
-    for jid in "${jobs[@]}"; do
-        wait_for_job "${jid}"
-    done
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/fastqc_0.12.1.sif" \
+        fastqc \
+        --threads 4 \
+        --outdir "${ROOT}/1_QC/fastqc/${id}" \
+        "${ROOT}/0_samples/${id}/${id}_R1.fastq.gz" \
+        "${ROOT}/0_samples/${id}/${id}_R2.fastq.gz"
 
-    submission="$(
-        ROOT="${ROOT}" STAGE="${STAGE}" \
-        bsub \
-            -J "QC_MultiQC" \
-            -n 1 \
-            -R "select[mem>=8000] rusage[mem=8000] span[hosts=1]" \
-            -M 8000 \
-            -o "${STAGE}/QC_MultiQC.%J.out" \
-            -e "${STAGE}/QC_MultiQC.%J.err" \
-            bash -lc '
-set -euo pipefail
+done < "${MANIFEST}"
+```
 
-tmpdir="$(mktemp -d "${STAGE}/.multiqc.tmp.XXXXXX")"
+## 1.3 Summarise raw-read QC with MultiQC
+
+**Input**
+
+```text
+1_QC/fastqc/
+```
+
+**Output**
+
+```text
+1_QC/multiqc/raw_reads_multiqc.html
+```
+
+```bash
+ROOT="$(pwd -P)"
+
+mkdir -p "${ROOT}/1_QC/multiqc"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
     "${ROOT}/0_tools/multiqc_1.17.sif" \
     multiqc \
     --filename raw_reads_multiqc.html \
-    --outdir "${tmpdir}" \
-    "${STAGE}/fastqc"
+    --outdir "${ROOT}/1_QC/multiqc" \
+    "${ROOT}/1_QC/fastqc"
+```
 
-mv "${tmpdir}" "${STAGE}/multiqc"
-'
-    )"
+---
 
-    echo "${submission}"
-    jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-    wait_for_job "${jid}"
+# 2 — Read mapping
 
-    mv "${STAGE}" "${ROOT}/1_QC"
-fi
+Reads are mapped to the reference genome using **mapping-helminth v1.0.8**.
 
+The workflow produces one indexed BAM file per sample together with SAMtools mapping statistics.
 
-# ==============================================================================
-# 2_mapping — mapping-helminth v1.0.8 followed by MultiQC summarisation of
-# SAMtools flagstat and stats outputs generated by the mapping pipeline
-# ==============================================================================
-if [[ ! -d "${ROOT}/2_mapping" ]]; then
-    echo "Creating and running 2_mapping"
+**Input**
 
-    STAGE="$(mktemp -d "${ROOT}/2_mapping.tmp.XXXXXX")"
+```text
+0_samples/<ID>/<ID>_R1.fastq.gz
+0_samples/<ID>/<ID>_R2.fastq.gz
+0_refseq/reference.fa
+```
 
-    mkdir -p "${ROOT}/0_tools"
+**Main output**
 
-    if [[ ! -f "${ROOT}/0_tools/multiqc_1.17.sif" ]]; then
-        multiqc_tmp="$(find "${ROOT}/0_tools" -maxdepth 1 -type f -name '.multiqc_1.17.sif.tmp.*' -print -quit)"
-        if [[ -z "${multiqc_tmp}" ]]; then
-            multiqc_tmp="$(mktemp "${ROOT}/0_tools/.multiqc_1.17.sif.tmp.XXXXXX")"
-        fi
-        wget -c \
-            -O "${multiqc_tmp}" \
-            "https://depot.galaxyproject.org/singularity/multiqc%3A1.17--pyhdfd78af_1"
-        mv "${multiqc_tmp}" "${ROOT}/0_tools/multiqc_1.17.sif"
-    fi
+```text
+2_mapping/outputs/<ID>/<ID>.bam
+2_mapping/outputs/<ID>/<ID>.bam.bai
+```
 
-    manifest_tmp="$(mktemp "${STAGE}/.fqpaths.manifest.tmp.XXXXXX")"
-    printf 'ID,R1,R2\n' > "${manifest_tmp}"
+## 2.1 Create a local FASTQ manifest
 
-    while IFS=, read -r id r1 r2; do
-        id="${id//$'\r'/}"
-        [[ "${id}" == "ID" || -z "${id}" ]] && continue
+`mapping-helminth` expects paths to the locally available FASTQ files.
 
-        printf '%s,%s,%s\n' \
-            "${id}" \
-            "${ROOT}/0_samples/${id}/${id}_R1.fastq.gz" \
-            "${ROOT}/0_samples/${id}/${id}_R2.fastq.gz" \
-            >> "${manifest_tmp}"
-    done < "${MANIFEST}"
+```bash
+ROOT="$(pwd -P)"
+MANIFEST="$(find "${ROOT}" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
 
-    mv "${manifest_tmp}" "${STAGE}/fqpaths.manifest"
+mkdir -p "${ROOT}/2_mapping"
 
-    submission="$(
-        ROOT="${ROOT}" STAGE="${STAGE}" REFERENCE="${REFERENCE}" \
-        bsub \
-            -J "HcoMap" \
-            -n 1 \
-            -R "select[mem>=80000] rusage[mem=80000] span[hosts=1]" \
-            -M 80000 \
-            -o "${STAGE}/HcoMap.%J.out" \
-            -e "${STAGE}/HcoMap.%J.err" \
-            bash -lc '
-set -euo pipefail
+printf 'ID,R1,R2\n' > "${ROOT}/2_mapping/fqpaths.manifest"
+
+while IFS=, read -r id r1 r2; do
+
+    id="${id//$'\r'/}"
+    [[ "${id}" == "ID" || -z "${id}" ]] && continue
+
+    printf '%s,%s,%s\n' \
+        "${id}" \
+        "${ROOT}/0_samples/${id}/${id}_R1.fastq.gz" \
+        "${ROOT}/0_samples/${id}/${id}_R2.fastq.gz" \
+        >> "${ROOT}/2_mapping/fqpaths.manifest"
+
+done < "${MANIFEST}"
+```
+
+## 2.2 Run mapping-helminth
+
+```bash
+ROOT="$(pwd -P)"
+REFERENCE="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.fa' -print -quit)"
 
 source /etc/profile.d/modules.sh
 module load mapping-helminth/v1.0.8
 
-# The mapping-helminth module currently exposes an obsolete shared Singularity
-# image library (/software/pathogen/images). Disable this library and use a
-# persistent project-local cache on the shared filesystem instead.
+mkdir -p \
+    "${ROOT}/0_tools/nextflow_singularity_cache" \
+    "${ROOT}/2_mapping/index_cache" \
+    "${ROOT}/2_mapping/work"
+
 unset NEXTFLOW_SINGULARITY_LIBRARY
 unset NXF_SINGULARITY_LIBRARYDIR
 
 export NXF_SINGULARITY_CACHEDIR="${ROOT}/0_tools/nextflow_singularity_cache"
-mkdir -p "${NXF_SINGULARITY_CACHEDIR}"
+export NXF_WORK="${ROOT}/2_mapping/work"
+export NXF_LOG_FILE="${ROOT}/2_mapping/nextflow.log"
 
-tmpdir="$(mktemp -d "${STAGE}/.outputs.tmp.XXXXXX")"
-export NXF_WORK="${STAGE}/work"
-export NXF_LOG_FILE="${STAGE}/nextflow.log"
-mkdir -p "${NXF_WORK}" "${STAGE}/index_cache"
-
-# mapping-helminth currently ignores some failed Nextflow processes.
-# Force the complete Nextflow run to return a non-zero exit status whenever
-# at least one process failed and was ignored.
-cat > "${STAGE}/nextflow_override.config" <<EOF
+cat > "${ROOT}/2_mapping/nextflow_override.config" <<EOF
 workflow.failOnIgnore = true
 
 singularity {
@@ -308,175 +347,150 @@ singularity {
 EOF
 
 mapping-helminth \
-    -c "${STAGE}/nextflow_override.config" \
+    -c "${ROOT}/2_mapping/nextflow_override.config" \
     --reference "${REFERENCE}" \
-    --input "${STAGE}/fqpaths.manifest" \
-    --outdir "${tmpdir}" \
-    --index_cache "${STAGE}/index_cache" \
+    --input "${ROOT}/2_mapping/fqpaths.manifest" \
+    --outdir "${ROOT}/2_mapping/outputs" \
+    --index_cache "${ROOT}/2_mapping/index_cache" \
     --keep_unmapped true
+```
 
-# Independently verify that mapping produced the expected BAM and BAM index
-# for every sample before accepting the stage as successfully completed.
-missing=0
+`workflow.failOnIgnore = true` ensures that ignored Nextflow process failures still cause the overall workflow to fail rather than silently producing an incomplete mapping run.
 
-while IFS=, read -r id r1 r2; do
-    id="${id//$'\r'/}"
-    [[ "${id}" == "ID" || -z "${id}" ]] && continue
+## 2.3 Summarise mapping statistics
 
-    bam="${tmpdir}/${id}/${id}.bam"
+SAMtools `flagstat` and `stats` files generated by `mapping-helminth` are aggregated with MultiQC.
 
-    if [[ ! -s "${bam}" ]]; then
-        echo "ERROR: missing BAM for sample ${id}: ${bam}" >&2
-        missing=1
-    fi
+**Input**
 
-    if [[ ! -s "${bam}.bai" && ! -s "${tmpdir}/${id}/${id}.bai" ]]; then
-        echo "ERROR: missing BAM index for sample ${id}." >&2
-        missing=1
-    fi
-done < "${STAGE}/fqpaths.manifest"
+```text
+2_mapping/outputs/
+```
 
-if (( missing != 0 )); then
-    echo "ERROR: mapping completed incompletely. Pipeline stopped." >&2
-    exit 1
-fi
+**Output**
 
-mv "${tmpdir}" "${STAGE}/outputs"
-'
-    )"
+```text
+2_mapping/multiqc/mapping_multiqc.html
+```
 
-    echo "${submission}"
-    jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-    wait_for_job "${jid}"
+```bash
+ROOT="$(pwd -P)"
 
-    submission="$(
-        ROOT="${ROOT}" STAGE="${STAGE}" \
-        bsub \
-            -J "Map_MultiQC" \
-            -n 1 \
-            -R "select[mem>=8000] rusage[mem=8000] span[hosts=1]" \
-            -M 8000 \
-            -o "${STAGE}/Map_MultiQC.%J.out" \
-            -e "${STAGE}/Map_MultiQC.%J.err" \
-            bash -lc '
-set -euo pipefail
-
-tmpdir="$(mktemp -d "${STAGE}/.multiqc.tmp.XXXXXX")"
+mkdir -p "${ROOT}/2_mapping/multiqc"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
     "${ROOT}/0_tools/multiqc_1.17.sif" \
     multiqc \
     --filename mapping_multiqc.html \
-    --outdir "${tmpdir}" \
-    "${STAGE}/outputs"
+    --outdir "${ROOT}/2_mapping/multiqc" \
+    "${ROOT}/2_mapping/outputs"
+```
 
-mv "${tmpdir}" "${STAGE}/multiqc"
-'
-    )"
+---
 
-    echo "${submission}"
-    jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-    wait_for_job "${jid}"
+# 3 — Variant calling and functional annotation
 
-    mv "${STAGE}" "${ROOT}/2_mapping"
-fi
+Variants are called independently for each sample.
 
+The analysis consists of:
 
-# ==============================================================================
-# 3_variants — strict MAPQ >20 filtering, BCFtools v1.23 pile-up generation,
-# multiallelic calling, biallelic normalisation and SnpEff v5.1d annotation
-# SNPs and short insertions/deletions are retained.
-# ==============================================================================
-if [[ ! -d "${ROOT}/3_variants" ]]; then
-    echo "Creating and running 3_variants"
+```text
+mapped BAM
+    │
+    ├── MAPQ >20 filtering
+    │
+    ▼
+bcftools mpileup
+    │
+    ▼
+bcftools call
+    │
+    ▼
+normalisation and splitting of multiallelic records
+    │
+    ▼
+biallelic VCF
+    │
+    ▼
+SnpEff annotation
+```
 
-    STAGE="$(mktemp -d "${ROOT}/3_variants.tmp.XXXXXX")"
+Both SNPs and short insertions/deletions are retained.
 
-    mkdir -p "${ROOT}/0_tools"
+---
 
-    if [[ ! -f "${ROOT}/0_tools/samtools_1.22.sif" ]]; then
-        samtools_tmp="$(find "${ROOT}/0_tools" -maxdepth 1 -type f -name '.samtools_1.22.sif.tmp.*' -print -quit)"
-        if [[ -z "${samtools_tmp}" ]]; then
-            samtools_tmp="$(mktemp "${ROOT}/0_tools/.samtools_1.22.sif.tmp.XXXXXX")"
-        fi
-        wget -c \
-            -O "${samtools_tmp}" \
-            "https://depot.galaxyproject.org/singularity/samtools%3A1.22--h96c455f_0"
-        mv "${samtools_tmp}" "${ROOT}/0_tools/samtools_1.22.sif"
-    fi
+## 3.1 Prepare SAMtools, BCFtools and SnpEff
 
-    if [[ ! -f "${ROOT}/0_tools/bcftools_1.23.sif" ]]; then
-        bcftools_tmp="$(find "${ROOT}/0_tools" -maxdepth 1 -type f -name '.bcftools_1.23.sif.tmp.*' -print -quit)"
-        if [[ -z "${bcftools_tmp}" ]]; then
-            bcftools_tmp="$(mktemp "${ROOT}/0_tools/.bcftools_1.23.sif.tmp.XXXXXX")"
-        fi
-        wget -c \
-            -O "${bcftools_tmp}" \
-            "https://depot.galaxyproject.org/singularity/bcftools%3A1.23--h3a4d415_0"
-        mv "${bcftools_tmp}" "${ROOT}/0_tools/bcftools_1.23.sif"
-    fi
+```bash
+ROOT="$(pwd -P)"
 
-    if [[ ! -f "${ROOT}/0_tools/snpeff_5.1d.sif" ]]; then
-        snpeff_tmp="$(find "${ROOT}/0_tools" -maxdepth 1 -type f -name '.snpeff_5.1d.sif.tmp.*' -print -quit)"
-        if [[ -z "${snpeff_tmp}" ]]; then
-            snpeff_tmp="$(mktemp "${ROOT}/0_tools/.snpeff_5.1d.sif.tmp.XXXXXX")"
-        fi
-        wget -c \
-            -O "${snpeff_tmp}" \
-            "https://depot.galaxyproject.org/singularity/snpeff%3A5.1d--hdfd78af_2"
-        mv "${snpeff_tmp}" "${ROOT}/0_tools/snpeff_5.1d.sif"
-    fi
+mkdir -p "${ROOT}/0_tools"
 
-    if [[ ! -f "${REFERENCE}.fai" ]]; then
-        reference_tmp="$(mktemp "$(dirname "${REFERENCE}")/.$(basename "${REFERENCE}").tmp.XXXXXX")"
-        rm -f "${reference_tmp}"
-        ln "${REFERENCE}" "${reference_tmp}"
+wget -c \
+    -O "${ROOT}/0_tools/samtools_1.22.sif" \
+    "https://depot.galaxyproject.org/singularity/samtools%3A1.22--h96c455f_0"
 
-        singularity exec \
-            --bind "${ROOT}:${ROOT}" \
-            "${ROOT}/0_tools/samtools_1.22.sif" \
-            samtools faidx \
-            "${reference_tmp}"
+wget -c \
+    -O "${ROOT}/0_tools/bcftools_1.23.sif" \
+    "https://depot.galaxyproject.org/singularity/bcftools%3A1.23--h3a4d415_0"
 
-        rm "${reference_tmp}"
-        mv "${reference_tmp}.fai" "${REFERENCE}.fai"
-    fi
+wget -c \
+    -O "${ROOT}/0_tools/snpeff_5.1d.sif" \
+    "https://depot.galaxyproject.org/singularity/snpeff%3A5.1d--hdfd78af_2"
+```
 
-    mkdir -p "${STAGE}/filtered_bam"
-    mkdir -p "${STAGE}/per_sample"
+Index the reference genome if necessary:
 
-    # The species-specific database is built from the same WBPS18 genome and
-    # annotation used for mapping and subsequent genomic interpretation.
-    if [[ ! -d "${ROOT}/0_tools/snpeff_Hco_WBPS18" ]]; then
-        submission="$(
-            ROOT="${ROOT}" REFERENCE="${REFERENCE}" ANNOTATION="${ANNOTATION}" \
-            bsub \
-                -J "HcoSnpEffDB" \
-                -n 4 \
-                -R "select[mem>=12000] rusage[mem=12000] span[hosts=1]" \
-                -M 12000 \
-                -o "${ROOT}/0_tools/HcoSnpEffDB.%J.out" \
-                -e "${ROOT}/0_tools/HcoSnpEffDB.%J.err" \
-                bash -lc '
-set -euo pipefail
+```bash
+ROOT="$(pwd -P)"
+REFERENCE="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.fa' -print -quit)"
 
-tmpdir="$(mktemp -d "${ROOT}/0_tools/.snpeff_Hco_WBPS18.tmp.XXXXXX")"
-mkdir -p "${tmpdir}/data/Hco_WBPS18"
+singularity exec \
+    --bind "${ROOT}:${ROOT}" \
+    "${ROOT}/0_tools/samtools_1.22.sif" \
+    samtools faidx \
+    "${REFERENCE}"
+```
+
+---
+
+## 3.2 Build the species-specific SnpEff database
+
+The SnpEff database is built directly from the **same genome and GTF annotation used for the genomic analysis**.
+
+**Input**
+
+```text
+0_refseq/reference.fa
+0_refseq/annotation.gtf
+```
+
+**Output**
+
+```text
+0_tools/snpeff_Hco_WBPS18/
+```
+
+```bash
+ROOT="$(pwd -P)"
+
+REFERENCE="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.fa' -print -quit)"
+ANNOTATION="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.gtf' -print -quit)"
+
+SNPEFF_DB="${ROOT}/0_tools/snpeff_Hco_WBPS18"
+
+mkdir -p "${SNPEFF_DB}/data/Hco_WBPS18"
 
 cp "${REFERENCE}" \
-   "${tmpdir}/data/Hco_WBPS18/sequences.fa"
+    "${SNPEFF_DB}/data/Hco_WBPS18/sequences.fa"
 
 cp "${ANNOTATION}" \
-   "${tmpdir}/data/Hco_WBPS18/genes.gtf"
+    "${SNPEFF_DB}/data/Hco_WBPS18/genes.gtf"
 
 printf "data.dir = %s\nHco_WBPS18.genome : Haemonchus contortus PRJEB506 WBPS18\n" \
-    "${tmpdir}/data" \
-    > "${tmpdir}/snpEff.build.config"
-
-printf "data.dir = %s\nHco_WBPS18.genome : Haemonchus contortus PRJEB506 WBPS18\n" \
-    "${ROOT}/0_tools/snpeff_Hco_WBPS18/data" \
-    > "${tmpdir}/snpEff.config"
+    "${SNPEFF_DB}/data" \
+    > "${SNPEFF_DB}/snpEff.config"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
@@ -485,205 +499,216 @@ singularity exec \
     -gtf22 \
     -noCheckCds \
     -noCheckProtein \
-    -c "${tmpdir}/snpEff.build.config" \
+    -c "${SNPEFF_DB}/snpEff.config" \
     -v Hco_WBPS18
+```
 
-rm "${tmpdir}/snpEff.build.config"
-mv "${tmpdir}" "${ROOT}/0_tools/snpeff_Hco_WBPS18"
-'
-        )"
+---
 
-        echo "${submission}"
-        jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-        wait_for_job "${jid}"
-    fi
+## 3.3 Call and annotate variants for each sample
 
-    jobs=()
+**Input**
 
-    while IFS=, read -r id r1 r2; do
-        id="${id//$'\r'/}"
-        [[ "${id}" == "ID" || -z "${id}" ]] && continue
+```text
+2_mapping/outputs/<ID>/<ID>.bam
+```
 
-        mkdir -p "${STAGE}/per_sample/${id}"
+**Outputs**
 
-        submission="$(
-            ROOT="${ROOT}" STAGE="${STAGE}" REFERENCE="${REFERENCE}" ID="${id}" \
-            bsub \
-                -J "VAR_${id}" \
-                -n 4 \
-                -R "select[mem>=16000] rusage[mem=16000] span[hosts=1]" \
-                -M 16000 \
-                -o "${STAGE}/per_sample/${id}/VAR_${id}.%J.out" \
-                -e "${STAGE}/per_sample/${id}/VAR_${id}.%J.err" \
-                bash -lc '
-set -euo pipefail
+```text
+3_variants/filtered_bam/<ID>.q21.bam
 
-filtered_tmp="$(mktemp "${STAGE}/filtered_bam/.${ID}.q21.bam.tmp.XXXXXX")"
-rm -f "${filtered_tmp}"
+3_variants/per_sample/<ID>/<ID>.norm.vcf.gz
+3_variants/per_sample/<ID>/<ID>.annotated.vcf.gz
+```
 
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/samtools_1.22.sif" \
-    samtools view \
-    --threads 4 \
-    -b \
-    -q 21 \
-    -o "${filtered_tmp}" \
-    "${ROOT}/2_mapping/outputs/${ID}/${ID}.bam"
+The MAPQ threshold is implemented as `-q 21`, i.e. reads with **MAPQ >20** are retained.
 
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/samtools_1.22.sif" \
-    samtools index \
-    -@ 4 \
-    -o "${filtered_tmp}.bai" \
-    "${filtered_tmp}"
+```bash
+ROOT="$(pwd -P)"
+MANIFEST="$(find "${ROOT}" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
+REFERENCE="$(find "${ROOT}/0_refseq" -maxdepth 1 -type f -name '*.fa' -print -quit)"
 
-mv "${filtered_tmp}" "${STAGE}/filtered_bam/${ID}.q21.bam"
-mv "${filtered_tmp}.bai" "${STAGE}/filtered_bam/${ID}.q21.bam.bai"
-
-mpileup_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.mpileup.bcf.tmp.XXXXXX")"
-rm -f "${mpileup_tmp}"
-
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/bcftools_1.23.sif" \
-    bcftools mpileup \
-    --threads 4 \
-    -f "${REFERENCE}" \
-    -q 21 \
-    -a FORMAT/AD,FORMAT/DP,FORMAT/ADF,FORMAT/ADR \
-    -Ob \
-    -o "${mpileup_tmp}" \
-    "${STAGE}/filtered_bam/${ID}.q21.bam"
-
-called_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.called.bcf.tmp.XXXXXX")"
-rm -f "${called_tmp}"
-
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/bcftools_1.23.sif" \
-    bcftools call \
-    --threads 4 \
-    -m \
-    -A \
-    -Ob \
-    -o "${called_tmp}" \
-    "${mpileup_tmp}"
-
-norm_preheader_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.norm.preheader.vcf.gz.tmp.XXXXXX")"
-rm -f "${norm_preheader_tmp}"
-
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/bcftools_1.23.sif" \
-    bcftools norm \
-    --threads 4 \
-    -f "${REFERENCE}" \
-    -m -any \
-    -Oz \
-    -o "${norm_preheader_tmp}" \
-    "${called_tmp}"
-
-rm -f "${mpileup_tmp}" "${called_tmp}"
-
-sample_name_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.sample_name.tmp.XXXXXX")"
-printf "%s\n" "${ID}" > "${sample_name_tmp}"
-
-norm_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.norm.vcf.gz.tmp.XXXXXX")"
-rm -f "${norm_tmp}"
-
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/bcftools_1.23.sif" \
-    bcftools reheader \
-    -s "${sample_name_tmp}" \
-    -o "${norm_tmp}" \
-    "${norm_preheader_tmp}"
-
-rm -f "${sample_name_tmp}" "${norm_preheader_tmp}"
-
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/bcftools_1.23.sif" \
-    bcftools index \
-    -f \
-    -t \
-    "${norm_tmp}"
-
-mv "${norm_tmp}" "${STAGE}/per_sample/${ID}/${ID}.norm.vcf.gz"
-mv "${norm_tmp}.tbi" "${STAGE}/per_sample/${ID}/${ID}.norm.vcf.gz.tbi"
-
-annotated_vcf_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.annotated.vcf.tmp.XXXXXX")"
-
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/snpeff_5.1d.sif" \
-    snpEff ann \
-    -noStats \
-    -c "${ROOT}/0_tools/snpeff_Hco_WBPS18/snpEff.config" \
-    -v Hco_WBPS18 \
-    "${STAGE}/per_sample/${ID}/${ID}.norm.vcf.gz" \
-    > "${annotated_vcf_tmp}"
-
-annotated_tmp="$(mktemp "${STAGE}/per_sample/${ID}/.${ID}.annotated.vcf.gz.tmp.XXXXXX")"
-rm -f "${annotated_tmp}"
-
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/bcftools_1.23.sif" \
-    bcftools view \
-    -Oz \
-    -o "${annotated_tmp}" \
-    "${annotated_vcf_tmp}"
-
-rm -f "${annotated_vcf_tmp}"
-
-singularity exec \
-    --bind "${ROOT}:${ROOT}" \
-    "${ROOT}/0_tools/bcftools_1.23.sif" \
-    bcftools index \
-    -f \
-    -t \
-    "${annotated_tmp}"
-
-mv "${annotated_tmp}" "${STAGE}/per_sample/${ID}/${ID}.annotated.vcf.gz"
-mv "${annotated_tmp}.tbi" "${STAGE}/per_sample/${ID}/${ID}.annotated.vcf.gz.tbi"
-'
-        )"
-
-        echo "${submission}"
-        jobs+=("$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")")
-    done < "${MANIFEST}"
-
-    for jid in "${jobs[@]}"; do
-        wait_for_job "${jid}"
-    done
-
-    mkdir -p "${STAGE}/merged"
-
-    submission="$(
-        ROOT="${ROOT}" STAGE="${STAGE}" MANIFEST="${MANIFEST}" \
-        bsub \
-            -J "HcoMergeVCF" \
-            -n 4 \
-            -R "select[mem>=16000] rusage[mem=16000] span[hosts=1]" \
-            -M 16000 \
-            -o "${STAGE}/merged/HcoMergeVCF.%J.out" \
-            -e "${STAGE}/merged/HcoMergeVCF.%J.err" \
-            bash -lc '
-set -euo pipefail
-
-vcf_list="$(mktemp "${STAGE}/merged/.annotated_vcfs.list.tmp.XXXXXX")"
+mkdir -p \
+    "${ROOT}/3_variants/filtered_bam" \
+    "${ROOT}/3_variants/per_sample"
 
 while IFS=, read -r id r1 r2; do
-    id="${id//$'"'"'\r'"'"'/}"
-    [[ "${id}" == "ID" || -z "${id}" ]] && continue
-    printf "%s\n" "${STAGE}/per_sample/${id}/${id}.annotated.vcf.gz" >> "${vcf_list}"
-done < "${MANIFEST}"
 
-merged_tmp="$(mktemp "${STAGE}/merged/.Hco.multisample.annotated.vcf.gz.tmp.XXXXXX")"
-rm -f "${merged_tmp}"
+    id="${id//$'\r'/}"
+    [[ "${id}" == "ID" || -z "${id}" ]] && continue
+
+    OUT="${ROOT}/3_variants/per_sample/${id}"
+    mkdir -p "${OUT}"
+
+    # ------------------------------------------------------------
+    # 1. Keep reads with MAPQ >20
+    # ------------------------------------------------------------
+
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/samtools_1.22.sif" \
+        samtools view \
+        --threads 4 \
+        -b \
+        -q 21 \
+        -o "${ROOT}/3_variants/filtered_bam/${id}.q21.bam" \
+        "${ROOT}/2_mapping/outputs/${id}/${id}.bam"
+
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/samtools_1.22.sif" \
+        samtools index \
+        -@ 4 \
+        "${ROOT}/3_variants/filtered_bam/${id}.q21.bam"
+
+    # ------------------------------------------------------------
+    # 2. Generate pile-up
+    # ------------------------------------------------------------
+
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/bcftools_1.23.sif" \
+        bcftools mpileup \
+        --threads 4 \
+        -f "${REFERENCE}" \
+        -q 21 \
+        -a FORMAT/AD,FORMAT/DP,FORMAT/ADF,FORMAT/ADR \
+        -Ob \
+        -o "${OUT}/${id}.mpileup.bcf" \
+        "${ROOT}/3_variants/filtered_bam/${id}.q21.bam"
+
+    # ------------------------------------------------------------
+    # 3. Call variants
+    # ------------------------------------------------------------
+
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/bcftools_1.23.sif" \
+        bcftools call \
+        --threads 4 \
+        -m \
+        -A \
+        -Ob \
+        -o "${OUT}/${id}.called.bcf" \
+        "${OUT}/${id}.mpileup.bcf"
+
+    # ------------------------------------------------------------
+    # 4. Normalise variants and split multiallelic records
+    # ------------------------------------------------------------
+
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/bcftools_1.23.sif" \
+        bcftools norm \
+        --threads 4 \
+        -f "${REFERENCE}" \
+        -m -any \
+        -Oz \
+        -o "${OUT}/${id}.norm.preheader.vcf.gz" \
+        "${OUT}/${id}.called.bcf"
+
+    # ------------------------------------------------------------
+    # 5. Set the VCF sample name from the manifest
+    # ------------------------------------------------------------
+
+    printf '%s\n' "${id}" > "${OUT}/${id}.sample_name.txt"
+
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/bcftools_1.23.sif" \
+        bcftools reheader \
+        -s "${OUT}/${id}.sample_name.txt" \
+        -o "${OUT}/${id}.norm.vcf.gz" \
+        "${OUT}/${id}.norm.preheader.vcf.gz"
+
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/bcftools_1.23.sif" \
+        bcftools index \
+        -f \
+        -t \
+        "${OUT}/${id}.norm.vcf.gz"
+
+    # ------------------------------------------------------------
+    # 6. Functional annotation with SnpEff
+    # ------------------------------------------------------------
+
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/snpeff_5.1d.sif" \
+        snpEff ann \
+        -noStats \
+        -c "${ROOT}/0_tools/snpeff_Hco_WBPS18/snpEff.config" \
+        -v Hco_WBPS18 \
+        "${OUT}/${id}.norm.vcf.gz" \
+        > "${OUT}/${id}.annotated.vcf"
+
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/bcftools_1.23.sif" \
+        bcftools view \
+        -Oz \
+        -o "${OUT}/${id}.annotated.vcf.gz" \
+        "${OUT}/${id}.annotated.vcf"
+
+    singularity exec \
+        --bind "${ROOT}:${ROOT}" \
+        "${ROOT}/0_tools/bcftools_1.23.sif" \
+        bcftools index \
+        -f \
+        -t \
+        "${OUT}/${id}.annotated.vcf.gz"
+
+    # Intermediate files are no longer required.
+    rm -f \
+        "${OUT}/${id}.mpileup.bcf" \
+        "${OUT}/${id}.called.bcf" \
+        "${OUT}/${id}.norm.preheader.vcf.gz" \
+        "${OUT}/${id}.sample_name.txt" \
+        "${OUT}/${id}.annotated.vcf"
+
+done < "${MANIFEST}"
+```
+
+---
+
+## 3.4 Merge samples into a multisample VCF
+
+All annotated per-sample VCFs are combined into a single multisample dataset.
+
+**Input**
+
+```text
+3_variants/per_sample/<ID>/<ID>.annotated.vcf.gz
+```
+
+**Output**
+
+```text
+3_variants/merged/Hco.multisample.annotated.vcf.gz
+3_variants/merged/Hco.multisample.annotated.vcf.gz.tbi
+```
+
+```bash
+ROOT="$(pwd -P)"
+MANIFEST="$(find "${ROOT}" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
+
+mkdir -p "${ROOT}/3_variants/merged"
+
+VCF_LIST="${ROOT}/3_variants/merged/annotated_vcfs.list"
+: > "${VCF_LIST}"
+
+while IFS=, read -r id r1 r2; do
+
+    id="${id//$'\r'/}"
+    [[ "${id}" == "ID" || -z "${id}" ]] && continue
+
+    printf '%s\n' \
+        "${ROOT}/3_variants/per_sample/${id}/${id}.annotated.vcf.gz" \
+        >> "${VCF_LIST}"
+
+done < "${MANIFEST}"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
@@ -691,11 +716,9 @@ singularity exec \
     bcftools merge \
     --threads 4 \
     -m none \
-    -l "${vcf_list}" \
+    -l "${VCF_LIST}" \
     -Oz \
-    -o "${merged_tmp}"
-
-rm -f "${vcf_list}"
+    -o "${ROOT}/3_variants/merged/Hco.multisample.annotated.vcf.gz"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
@@ -703,70 +726,82 @@ singularity exec \
     bcftools index \
     -f \
     -t \
-    "${merged_tmp}"
+    "${ROOT}/3_variants/merged/Hco.multisample.annotated.vcf.gz"
+```
 
-mv "${merged_tmp}" "${STAGE}/merged/Hco.multisample.annotated.vcf.gz"
-mv "${merged_tmp}.tbi" "${STAGE}/merged/Hco.multisample.annotated.vcf.gz.tbi"
-'
-    )"
+---
 
-    echo "${submission}"
-    jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-    wait_for_job "${jid}"
+# 4 — Pairwise genetic differentiation (FST)
 
-    mv "${STAGE}" "${ROOT}/3_variants"
-fi
+Pairwise genetic differentiation between pooled samples is calculated directly from the mapped BAM files with **Grenedalf 0.6.3**.
 
+This analysis is independent of the VCF generated above.
 
-# ==============================================================================
-# 4_FST — pairwise genetic differentiation with Grenedalf v0.6.3 in
-# overlapping 5 kb windows with a 2.5 kb step
-# ==============================================================================
-if [[ ! -d "${ROOT}/4_FST" ]]; then
-    echo "Creating and running 4_FST"
+## Parameters
 
-    STAGE="$(mktemp -d "${ROOT}/4_FST.tmp.XXXXXX")"
+| Parameter                       |           Value |
+| ------------------------------- | --------------: |
+| FST estimator                   |    unbiased Nei |
+| Minimum mapping quality         |              30 |
+| Minimum base quality            |              30 |
+| Minimum allele count per sample |               2 |
+| Minimum read depth per sample   |              30 |
+| Maximum read depth per sample   |             300 |
+| Pool size                       |           1,000 |
+| Window size                     |            5 kb |
+| Window step                     |          2.5 kb |
+| Window averaging                | valid loci only |
 
-    mkdir -p "${ROOT}/0_tools"
+The use of a 2.5-kb stride produces **50% overlapping 5-kb windows**.
 
-    if [[ ! -f "${ROOT}/0_tools/grenedalf_0.6.3.sif" ]]; then
-        grenedalf_tmp="$(find "${ROOT}/0_tools" -maxdepth 1 -type f -name '.grenedalf_0.6.3.sif.tmp.*' -print -quit)"
-        if [[ -z "${grenedalf_tmp}" ]]; then
-            grenedalf_tmp="$(mktemp "${ROOT}/0_tools/.grenedalf_0.6.3.sif.tmp.XXXXXX")"
-        fi
-        wget -c \
-            -O "${grenedalf_tmp}" \
-            "https://depot.galaxyproject.org/singularity/grenedalf%3A0.6.3--hbefcdb2_0"
-        mv "${grenedalf_tmp}" "${ROOT}/0_tools/grenedalf_0.6.3.sif"
-    fi
+## 4.1 Download Grenedalf
 
-    submission="$(
-        ROOT="${ROOT}" STAGE="${STAGE}" MANIFEST="${MANIFEST}" \
-        bsub \
-            -J "HcoFST" \
-            -n 16 \
-            -R "select[mem>=32000] rusage[mem=32000] span[hosts=1]" \
-            -M 32000 \
-            -o "${STAGE}/HcoFST.%J.out" \
-            -e "${STAGE}/HcoFST.%J.err" \
-            bash -lc '
-set -euo pipefail
+```bash
+ROOT="$(pwd -P)"
 
-bams=()
+mkdir -p "${ROOT}/0_tools"
+
+wget -c \
+    -O "${ROOT}/0_tools/grenedalf_0.6.3.sif" \
+    "https://depot.galaxyproject.org/singularity/grenedalf%3A0.6.3--hbefcdb2_0"
+```
+
+## 4.2 Run FST analysis
+
+**Input**
+
+```text
+2_mapping/outputs/<ID>/<ID>.bam
+```
+
+**Output**
+
+```text
+4_FST/windows_5kb/
+```
+
+```bash
+ROOT="$(pwd -P)"
+MANIFEST="$(find "${ROOT}" -maxdepth 1 -type f -name '*.manifest' -print -quit)"
+
+mkdir -p "${ROOT}/4_FST/windows_5kb"
+
+BAMS=()
 
 while IFS=, read -r id r1 r2; do
-    id="${id//$'"'"'\r'"'"'/}"
-    [[ "${id}" == "ID" || -z "${id}" ]] && continue
-    bams+=("${ROOT}/2_mapping/outputs/${id}/${id}.bam")
-done < "${MANIFEST}"
 
-tmpdir="$(mktemp -d "${STAGE}/.windows_5kb.tmp.XXXXXX")"
+    id="${id//$'\r'/}"
+    [[ "${id}" == "ID" || -z "${id}" ]] && continue
+
+    BAMS+=("${ROOT}/2_mapping/outputs/${id}/${id}.bam")
+
+done < "${MANIFEST}"
 
 singularity exec \
     --bind "${ROOT}:${ROOT}" \
     "${ROOT}/0_tools/grenedalf_0.6.3.sif" \
     grenedalf fst \
-    --sam-path "${bams[@]}" \
+    --sam-path "${BAMS[@]}" \
     --method unbiased-nei \
     --sam-min-map-qual 30 \
     --sam-min-base-qual 30 \
@@ -782,17 +817,49 @@ singularity exec \
     --na-entry nan \
     --threads 16 \
     --compress \
-    --out-dir "${tmpdir}"
+    --out-dir "${ROOT}/4_FST/windows_5kb"
+```
 
-mv "${tmpdir}" "${STAGE}/windows_5kb"
-'
-    )"
+---
 
-    echo "${submission}"
-    jid="$(sed -n 's/.*Job <\([0-9][0-9]*\)>.*/\1/p' <<< "${submission}")"
-    wait_for_job "${jid}"
+# Important methodological distinction
 
-    mv "${STAGE}" "${ROOT}/4_FST"
-fi
+The **variant-calling** and **FST** branches deliberately use different filtering criteria.
 
-echo "Pipeline completed."
+```text
+Variant calling
+    └── MAPQ >20
+         └── BCFtools → SnpEff → multisample VCF
+
+FST analysis
+    ├── MAPQ ≥30
+    ├── base quality ≥30
+    ├── depth 30–300
+    └── Grenedalf directly from BAM
+```
+
+The Grenedalf analysis therefore does **not** use either the MAPQ-filtered BAM files from the variant-calling branch or the resulting VCF.
+
+---
+
+# Main outputs
+
+| Analysis                       | Main output                                          |
+| ------------------------------ | ---------------------------------------------------- |
+| Raw-read QC                    | `1_QC/multiqc/raw_reads_multiqc.html`                |
+| Mapping                        | `2_mapping/outputs/<ID>/<ID>.bam`                    |
+| Mapping QC                     | `2_mapping/multiqc/mapping_multiqc.html`             |
+| Per-sample normalised variants | `3_variants/per_sample/<ID>/<ID>.norm.vcf.gz`        |
+| Per-sample annotated variants  | `3_variants/per_sample/<ID>/<ID>.annotated.vcf.gz`   |
+| Multisample variant dataset    | `3_variants/merged/Hco.multisample.annotated.vcf.gz` |
+| Windowed pairwise FST          | `4_FST/windows_5kb/`                                 |
+
+---
+
+# Notes on execution
+
+The commands above document the **analysis itself** and are intentionally simpler than the production HPC workflow.
+
+In practice, computationally intensive steps can be submitted independently through LSF using `bsub`, and per-sample FastQC and variant-calling jobs can be run in parallel.
+
+The production workflow additionally uses temporary files and directories, verifies LSF completion states, and only promotes completed temporary outputs to their final paths. These mechanisms improve robustness on an HPC system but are not required to understand the scientific analysis documented here.
